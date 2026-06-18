@@ -6,12 +6,11 @@ import astra
 class AstraRadonFn(torch.autograd.Function):
     """
     Matrix-Free PyTorch Autograd Function.
-    Uses ASTRA's native CUDA kernels to compute the exact forward and adjoint 
-    transforms on-the-fly, consuming ZERO memory for the system matrix.
+    Uses ASTRA's explicit FP_CUDA and BP_CUDA algorithms to compute the exact 
+    forward and adjoint transforms on-the-fly, consuming ZERO memory for the matrix.
     """
     @staticmethod
     def forward(ctx, x, vol_geom, proj_geom):
-        # x shape: (B, C, H, W)
         B, C, H, W = x.shape
         device = x.device
         
@@ -22,11 +21,24 @@ class AstraRadonFn(torch.autograd.Function):
         num_detectors = proj_geom['DetectorCount']
         y_np = np.zeros((B, C, num_angles, num_detectors), dtype=np.float32)
         
-        # Compute Forward Projection on GPU
+        # Compute Forward Projection on GPU using FP_CUDA
         for b in range(B):
             for c in range(C):
-                sino_id, sino_data = astra.create_sino_gpu(x_np[b, c], proj_geom, vol_geom)
-                y_np[b, c] = sino_data
+                vol_id = astra.data2d.create('-vol', vol_geom, x_np[b, c])
+                sino_id = astra.data2d.create('-sino', proj_geom)
+                
+                cfg = astra.astra_dict('FP_CUDA')
+                cfg['VolumeDataId'] = vol_id
+                cfg['ProjectionDataId'] = sino_id
+                
+                alg_id = astra.algorithm.create(cfg)
+                astra.algorithm.run(alg_id)
+                
+                y_np[b, c] = astra.data2d.get(sino_id)
+                
+                # Cleanup C++ memory
+                astra.algorithm.delete(alg_id)
+                astra.data2d.delete(vol_id)
                 astra.data2d.delete(sino_id)
                 
         ctx.vol_geom = vol_geom
@@ -48,12 +60,25 @@ class AstraRadonFn(torch.autograd.Function):
         W = vol_geom['GridColCount']
         grad_x_np = np.zeros((B, C, H, W), dtype=np.float32)
         
-        # Compute Exact Adjoint (Backprojection) on GPU
+        # Compute Exact Adjoint (Backprojection) on GPU using BP_CUDA
         for b in range(B):
             for c in range(C):
-                bp_id, bp_data = astra.create_backprojection_gpu(grad_np[b, c], proj_geom, vol_geom)
-                grad_x_np[b, c] = bp_data
-                astra.data2d.delete(bp_id)
+                sino_id = astra.data2d.create('-sino', proj_geom, grad_np[b, c])
+                vol_id = astra.data2d.create('-vol', vol_geom)
+                
+                cfg = astra.astra_dict('BP_CUDA')
+                cfg['VolumeDataId'] = vol_id
+                cfg['ProjectionDataId'] = sino_id
+                
+                alg_id = astra.algorithm.create(cfg)
+                astra.algorithm.run(alg_id)
+                
+                grad_x_np[b, c] = astra.data2d.get(vol_id)
+                
+                # Cleanup C++ memory
+                astra.algorithm.delete(alg_id)
+                astra.data2d.delete(vol_id)
+                astra.data2d.delete(sino_id)
                 
         return torch.from_numpy(grad_x_np).to(device), None, None
 
@@ -63,7 +88,7 @@ class RadonPhysics(nn.Module):
         super().__init__()
         self.device = device
         
-        # Define ASTRA Geometries (These are just lightweight dictionaries, 0 VRAM!)
+        # Define ASTRA Geometries (Lightweight dictionaries, 0 VRAM!)
         self.vol_geom = astra.create_vol_geom(img_size, img_size)
         angles = np.linspace(0, np.pi, num_angles, endpoint=False)
         self.proj_geom = astra.create_proj_geom('parallel', 1.0, num_detectors, angles)
@@ -85,8 +110,20 @@ class RadonPhysics(nn.Module):
         
         for b in range(B):
             for c in range(C):
-                bp_id, bp_data = astra.create_backprojection_gpu(y_np[b, c], self.proj_geom, self.vol_geom)
-                x_np[b, c] = bp_data
-                astra.data2d.delete(bp_id)
+                sino_id = astra.data2d.create('-sino', self.proj_geom, y_np[b, c])
+                vol_id = astra.data2d.create('-vol', self.vol_geom)
+                
+                cfg = astra.astra_dict('BP_CUDA')
+                cfg['VolumeDataId'] = vol_id
+                cfg['ProjectionDataId'] = sino_id
+                
+                alg_id = astra.algorithm.create(cfg)
+                astra.algorithm.run(alg_id)
+                
+                x_np[b, c] = astra.data2d.get(vol_id)
+                
+                astra.algorithm.delete(alg_id)
+                astra.data2d.delete(vol_id)
+                astra.data2d.delete(sino_id)
                 
         return torch.from_numpy(x_np).to(self.device)

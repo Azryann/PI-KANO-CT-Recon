@@ -38,7 +38,7 @@ class LoDoPaBStreamer(Dataset):
 
 def get_dataloaders(kaggle_input_dir, batch_size=4):
     """Initializes the training and validation streaming loaders."""
-    train_path = os.path.join(kaggle_input_dir, 'ground_truth_train', 'ground_truth_train_000.hdf5') # Adjust based on actual Kaggle folder structure
+    train_path = os.path.join(kaggle_input_dir, 'ground_truth_train_000.hdf5') # Adjust based on actual Kaggle folder structure
     
     train_dataset = LoDoPaBStreamer(train_path)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)

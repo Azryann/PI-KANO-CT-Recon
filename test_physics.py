@@ -1,5 +1,5 @@
 import torch
-from physics_operators import ExactParallelBeamRadon
+from physics import ExactParallelBeamRadon
 
 def test_operators():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

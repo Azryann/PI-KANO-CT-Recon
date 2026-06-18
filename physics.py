@@ -65,20 +65,23 @@ class RadonPhysics(nn.Module):
     def _generate_dummy_system_matrix(self):
         """
         Generates a highly sparse random matrix to simulate ray-driven CT physics.
-        Memory efficient for 4GB VRAM.
+        Memory-safe for 4GB local prototyping by capping non-zero elements.
         """
         N = self.img_shape[0] * self.img_shape[1]
         M = self.sino_shape[0] * self.sino_shape[1]
         
-        # Simulate ~5% sparsity (rays only hit a fraction of pixels)
-        nnz = int(M * N * 0.05)
+        # Cap the maximum non-zero elements to 1,000,000 (takes ~8MB RAM)
+        # instead of letting it scale quadratically.
+        max_nnz = 1000000
+        nnz = min(int(M * N * 0.05), max_nnz)
         
-        indices = torch.randint(0, M, (1, nnz))
-        indices = torch.cat([indices, torch.randint(0, N, (1, nnz))], dim=0)
-        values = torch.rand(nnz)
+        # Use 32-bit integers to reduce memory overhead during generation
+        indices = torch.randint(0, M, (1, nnz), dtype=torch.int32)
+        indices = torch.cat([indices, torch.randint(0, N, (1, nnz), dtype=torch.int32)], dim=0)
+        values = torch.rand(nnz, dtype=torch.float32)
         
-        # Create sparse tensor
-        A = torch.sparse_coo_tensor(indices, values, (M, N)).coalesce()
+        # Create sparse tensor (cast indices back to int64 for sparse construction)
+        A = torch.sparse_coo_tensor(indices.to(torch.int64), values, (M, N)).coalesce()
         return A
 
     def forward(self, x):

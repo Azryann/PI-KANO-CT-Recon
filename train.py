@@ -111,7 +111,7 @@ if __name__ == "__main__":
     if os.path.exists(KAGGLE_PATH):
         print("Kaggle environment verified. Commencing full-scale training on 85GB LoDoPaB...")
         # 50 Epochs is the standard for convergence on this dataset
-        train_pi_kano(KAGGLE_PATH, epochs=50, batch_size=2, lr=1e-3, device=device)
+        train_pi_kano(KAGGLE_PATH, epochs=50, batch_size=1, lr=1e-3, device=device)
     else:
         print("Kaggle dataset not found. Using local dummy streaming for prototyping...")
         train_pi_kano("dummy_path", epochs=1, batch_size=1, lr=1e-3, device=device)

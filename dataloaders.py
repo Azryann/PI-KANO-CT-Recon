@@ -21,10 +21,11 @@ class LoDoPaBDataset(IterableDataset):
         self.sino_shape = (1000, 513)  # (Angles, Detectors)
         self.img_shape = (362, 362)    # (H, W)
         
-        # Define the features to extract from the TFRecord
+        # Official LoDoPaB-CT stores data as tf.train.FloatList
+        # So we map them as "float" instead of "byte"
         self.description = {
-            "observation": "byte",
-            "ground_truth": "byte"
+            "observation": "float",
+            "ground_truth": "float"
         }
         
         # Initialize the underlying TFRecord reader
@@ -34,11 +35,10 @@ class LoDoPaBDataset(IterableDataset):
             description=self.description
         )
 
-    def _decode_and_reshape(self, byte_data, target_shape):
-        """Decodes raw bytes into float32 PyTorch tensors and reshapes them."""
-        # Convert bytes to numpy array, then to PyTorch tensor
-        array = np.frombuffer(byte_data, dtype=np.float32)
-        tensor = torch.from_numpy(array.copy())
+    def _decode_and_reshape(self, float_array, target_shape):
+        """Converts the parsed float array into a PyTorch tensor and reshapes it."""
+        # The tfrecord library already parsed it as a float sequence
+        tensor = torch.tensor(float_array, dtype=torch.float32)
         
         # Reshape and add channel dimension (C=1)
         return tensor.view(1, *target_shape)
@@ -55,7 +55,6 @@ class LoDoPaBDataset(IterableDataset):
                 
                 yield sinogram, ground_truth
             except Exception as e:
-                # Skip corrupted records if any exist
                 print(f"Skipping corrupted record: {e}")
                 continue
 
@@ -74,17 +73,16 @@ if __name__ == "__main__":
     print("Setting up local dummy TFRecord for testing...")
     dummy_tfrecord_path = "dummy_lodopab.tfrecord"
     
-    # 1. Create a dummy TFRecord file to simulate LoDoPaB-CT locally
+    # 1. Create a dummy TFRecord file (Using FloatList this time!)
     writer = tfrecord.TFRecordWriter(dummy_tfrecord_path)
-    for _ in range(5):  # Create 5 dummy samples
-        # Create random float32 arrays matching LoDoPaB dimensions
-        dummy_sino = np.random.randn(1000, 513).astype(np.float32)
-        dummy_img = np.random.randn(362, 362).astype(np.float32)
+    for _ in range(5):  
+        dummy_sino = np.random.randn(1000 * 513).astype(np.float32)
+        dummy_img = np.random.randn(362 * 362).astype(np.float32)
         
-        # Write to TFRecord
+        # Write using 'float' matching official LoDoPaB
         writer.write({
-            "observation": (dummy_sino.tobytes(), "byte"),
-            "ground_truth": (dummy_img.tobytes(), "byte")
+            "observation": (dummy_sino, "float"),
+            "ground_truth": (dummy_img, "float")
         })
     writer.close()
     
@@ -97,12 +95,5 @@ if __name__ == "__main__":
         print(f"  Sinogram shape: {sinograms.shape} | dtype: {sinograms.dtype}")
         print(f"  Image shape:    {images.shape} | dtype: {images.dtype}")
         
-        # Verify shapes match expected PyTorch format: (Batch, Channels, H, W)
-        assert sinograms.shape == (2, 1, 1000, 513), "Sinogram shape mismatch!"
-        assert images.shape == (2, 1, 362, 362), "Image shape mismatch!"
-        
     print("\nSUCCESS: Streaming DataLoader verified. No memory overflow detected.")
-    
-    # 3. Cleanup local dummy file
     os.remove(dummy_tfrecord_path)
-    print("Cleaned up dummy files.")

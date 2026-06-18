@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+import numpy as np
 from skimage.metrics import structural_similarity as ssim
 
 # Import our custom PI-KANO modules
@@ -34,8 +35,8 @@ def compute_metrics(pred, gt):
         psnr = 20 * np.log10(data_range / (rmse + 1e-8))
         psnrs.append(psnr)
         
-        # Calculate SSIM
-        s_val = ssim(p, g, data_range=data_range)
+        # Calculate SSIM (using win_size=3 to avoid issues with small test patches)
+        s_val = ssim(p, g, data_range=data_range, win_size=3)
         ssims.append(s_val)
         
     return np.mean(psnrs), np.mean(nrmses), np.mean(ssims)
@@ -45,6 +46,7 @@ def train_pi_kano(tfrecord_path, epochs=1, batch_size=2, lr=1e-3, device='cuda')
     print(f"Setting up PI-KANO Training on {device}...")
     
     # 1. Initialize Dataset & Dataloader
+    # This will automatically use Kaggle TF parsing or Local Dummy depending on the path
     dataloader = get_lodopab_dataloader(tfrecord_path, batch_size=batch_size)
     
     # 2. Instantiate Model
@@ -75,11 +77,10 @@ def train_pi_kano(tfrecord_path, epochs=1, batch_size=2, lr=1e-3, device='cuda')
             # Forward pass: Reconstruct CT image
             reconstructions = model(sinograms)
             
-            # Loss Component 1: Image Alignment Loss (supervised ground-truth matching)
+            # Loss Component 1: Image Alignment Loss
             alignment_loss = F.mse_loss(reconstructions, ground_truths)
             
             # Loss Component 2: Data Fidelity Loss (Enforces Physics Consistency)
-            # Re-project the reconstruction back to measurement space
             pred_sinograms = model.physics(reconstructions)
             fidelity_loss = F.mse_loss(pred_sinograms, sinograms)
             
@@ -99,15 +100,14 @@ def train_pi_kano(tfrecord_path, epochs=1, batch_size=2, lr=1e-3, device='cuda')
             epoch_ssim += ssim_val
             steps += 1
             
-            # Print status every step (locally) or every 50 steps (on Kaggle)
-            if batch_idx % 1 == 0:
-                print(f"Epoch [{epoch+1}/{epochs}] Step [{batch_idx+1}] "
-                      f"| Loss: {total_loss.item():.6f} | PSNR: {psnr_val:.2f}dB | SSIM: {ssim_val:.4f}")
+            # Print status (Log every step so you can see it working immediately)
+            print(f"Epoch [{epoch+1}/{epochs}] Step [{batch_idx+1}] "
+                  f"| Loss: {total_loss.item():.6f} | PSNR: {psnr_val:.2f}dB | SSIM: {ssim_val:.4f}")
                 
-            # Local prototyping protection (break early after 3 batches)
+            # Local prototyping protection (break early to prevent RTX 3050 OOM).
             if device == 'cuda' and torch.cuda.get_device_properties(device).total_memory / (1024**3) < 5.0:
                 if steps >= 3:
-                    print("\n[INFO] Local Prototyping Complete (Stopped early to prevent RTX 3050 OOM).")
+                    print("\n[INFO] Local Prototyping Complete (Stopped early to prevent OOM).")
                     break
         
         # Calculate Epoch Averages
@@ -124,36 +124,14 @@ def train_pi_kano(tfrecord_path, epochs=1, batch_size=2, lr=1e-3, device='cuda')
 
 
 if __name__ == "__main__":
-    import numpy as np
-    import tfrecord
-    
     # Check if we are running in Kaggle Cloud or Local
     KAGGLE_PATH = "/kaggle/input/datasets/peeeeeg/lodopab/lodopab_full_dose_train.tfrecord"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     if os.path.exists(KAGGLE_PATH):
         print("Kaggle environment verified. Commencing full-scale training on 85GB LoDoPaB...")
-        train_pi_kano(KAGGLE_PATH, epochs=5, batch_size=4, lr=1e-3, device=device)
+        # Start training with a batch size of 2 to ensure it fits in Kaggle's T4/P100 VRAM
+        train_pi_kano(KAGGLE_PATH, epochs=50, batch_size=2, lr=1e-3, device=device)
     else:
-        print("Kaggle dataset not found. Generating a temporary dummy dataset for local prototyping...")
-        dummy_path = "local_temp_lodopab.tfrecord"
-        
-        # Write dummy samples
-        writer = tfrecord.TFRecordWriter(dummy_path)
-        for _ in range(4):  # Generate 4 dummy samples
-            dummy_sino = np.random.randn(1000, 513).astype(np.float32)
-            dummy_img = np.random.randn(362, 362).astype(np.float32)
-            writer.write({
-                "observation": (dummy_sino.tobytes(), "byte"),
-                "ground_truth": (dummy_img.tobytes(), "byte")
-            })
-        writer.close()
-        
-        try:
-            # Run local prototyping loop
-            train_pi_kano(dummy_path, epochs=1, batch_size=2, lr=1e-3, device=device)
-        finally:
-            # Cleanup
-            if os.path.exists(dummy_path):
-                os.remove(dummy_path)
-                print("Cleaned up temporary local files.")
+        print("Kaggle dataset not found. Using local dummy streaming for prototyping...")
+        train_pi_kano("dummy_path", epochs=1, batch_size=1, lr=1e-3, device=device)

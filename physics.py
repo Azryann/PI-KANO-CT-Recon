@@ -67,7 +67,8 @@ class AstraRadonFn(torch.autograd.Function):
                 vol_id = astra.data2d.create('-vol', vol_geom)
                 
                 cfg = astra.astra_dict('BP_CUDA')
-                cfg['VolumeDataId'] = vol_id
+                # FIX: ASTRA requires 'ReconstructionDataId' for Backprojection
+                cfg['ReconstructionDataId'] = vol_id  
                 cfg['ProjectionDataId'] = sino_id
                 
                 alg_id = astra.algorithm.create(cfg)
@@ -114,7 +115,8 @@ class RadonPhysics(nn.Module):
                 vol_id = astra.data2d.create('-vol', self.vol_geom)
                 
                 cfg = astra.astra_dict('BP_CUDA')
-                cfg['VolumeDataId'] = vol_id
+                # FIX: ASTRA requires 'ReconstructionDataId' for Backprojection
+                cfg['ReconstructionDataId'] = vol_id  
                 cfg['ProjectionDataId'] = sino_id
                 
                 alg_id = astra.algorithm.create(cfg)

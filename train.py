@@ -58,6 +58,13 @@ def train_pi_kano(tfrecord_path, epochs=50, batch_size=2, lr=1e-3, device='cuda'
             sinograms = sinograms.to(device)
             ground_truths = ground_truths.to(device)
             
+            # 3. PHYSICAL DATA SCALING:
+            # LoDoPaB physical attenuation max is ~0.1. 
+            # We scale by 0.1 to bring targets into the [0, 1] range.
+            PHYSICAL_CONSTANT = 0.1
+            sinograms = sinograms / PHYSICAL_CONSTANT
+            ground_truths = ground_truths / PHYSICAL_CONSTANT
+            
             optimizer.zero_grad()
             
             # Forward pass

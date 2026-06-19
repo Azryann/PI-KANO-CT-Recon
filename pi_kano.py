@@ -26,38 +26,66 @@ class SpectralGSKAN2d(nn.Module):
         x_spatial = torch.fft.irfft2(out_ft, s=(H, W))
         return x_spatial
 
-
 class PI_KANO(nn.Module):
     def __init__(self, img_size=362, num_angles=1000, num_detectors=513, device='cuda'):
         super().__init__()
         self.device = device
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
         
-        # Q1 Theory: Learnable Proximal Step Size (tau)
-        # Initializes at 1/1000 to perfectly normalize the ASTRA integral sum
-        self.step_size = nn.Parameter(torch.tensor(1.0 / num_angles, dtype=torch.float32))
-        
         hidden_channels = 32
         
+        # 1. Compute Operator Norm ||A||^2 via Power Iteration
+        print("Computing Operator Norm ||A||^2 via Power Iteration...")
+        self.operator_norm_sq = self._power_iteration(img_size)
+        self.tau_max = 2.0 / self.operator_norm_sq
+        print(f"||A||^2 = {self.operator_norm_sq:.2f} | Strict Upper Bound for tau = {self.tau_max:.6f}")
+        
+        # Initialize step size safely below the theoretical boundary
+        self.step_size = nn.Parameter(torch.tensor(self.tau_max * 0.1, dtype=torch.float32))
+        
         self.lifting = nn.Conv2d(1, hidden_channels, kernel_size=3, padding=1)
+        
+        # 2. STRICT NORMALIZATION: Traps tensors in N(0,1) for the B-spline grid [-2, 2]
+        self.norm1 = nn.InstanceNorm2d(hidden_channels, affine=True)
+        self.norm2 = nn.InstanceNorm2d(hidden_channels, affine=True)
+        
         self.spectral_block = SpectralGSKAN2d(hidden_channels, hidden_channels, modes1=16, modes2=16)
         self.spatial_block = GSKANConv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1)
         self.projection = nn.Conv2d(hidden_channels, 1, kernel_size=3, padding=1)
 
+    def _power_iteration(self, img_size, num_iters=15):
+        """ Estimates the largest eigenvalue of A^T A """
+        u = torch.randn(1, 1, img_size, img_size, device=self.device)
+        u = u / torch.norm(u)
+        with torch.no_grad():
+            for _ in range(num_iters):
+                v = self.physics.adjoint(self.physics.forward(u))
+                norm_v = torch.norm(v)
+                u = v / norm_v
+        return norm_v.item()
+
     def forward(self, sinogram):
-        # 1. Scaled Physics-Informed Initialization
-        # Normalizes the raw adjoint to match the physical scale of the ground truth
-        x_init = self.physics.adjoint(sinogram) * self.step_size
+        # Enforce theoretical proximal bound: tau must be strictly < 2 / ||A||^2
+        tau = torch.clamp(self.step_size, min=1e-8, max=self.tau_max * 0.99)
         
-        # 2. Lift to high-dimensional feature space
+        # Physics-Informed Initialization
+        x_init = self.physics.adjoint(sinogram) * tau
+        
+        # Lifting
         feat = self.lifting(x_init)
         
-        # 3. Dual-domain operator processing
+        # Strict Normalization before GS-KAN
+        feat = self.norm1(feat)
+        
+        # Dual-domain operator processing
         feat_spectral = self.spectral_block(feat)
         feat_spatial = self.spatial_block(feat)
         feat_fused = feat_spectral + feat_spatial
         
-        # 4. Project back to image space
+        # Strict Normalization after operator fusion
+        feat_fused = self.norm2(feat_fused)
+        
+        # Project back to image space
         reconstruction = self.projection(feat_fused)
         
         return x_init + reconstruction

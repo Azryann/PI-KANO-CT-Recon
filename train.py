@@ -68,17 +68,32 @@ def train_pi_kano(tfrecord_path, epochs=50, batch_size=2, lr=1e-3, device='cuda'
             optimizer.zero_grad()
             
             # Forward pass
+            # Forward pass
             reconstructions = model(sinograms)
             
-            # Physics-Informed Loss
+            # 1. Image Alignment Loss
             alignment_loss = F.mse_loss(reconstructions, ground_truths)
+            
+            # 2. Physics Data Fidelity Loss
             pred_sinograms = model.physics(reconstructions)
             fidelity_loss = F.mse_loss(pred_sinograms, sinograms)
             
-            total_loss = alignment_loss + lambda_physics * fidelity_loss
+            # 3. KAN Curvature Penalty (NEW - Suppresses Spline Oscillations)
+            curve_penalty = model.compute_kan_regularization()
+            
+            # Hyperparameters for Q1 stability
+            lambda_physics = 0.1
+            lambda_curve = 0.01  # Forces the B-splines to remain smooth
+            
+            # Fused Physics-Informed Loss
+            total_loss = alignment_loss + (lambda_physics * fidelity_loss) + (lambda_curve * curve_penalty)
             
             # Backward pass
             total_loss.backward()
+            
+            # Gradient Clipping (Extra safety measure against exploding gradients)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
             
             # Metrics

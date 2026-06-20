@@ -25,6 +25,9 @@ class SpectralGSKAN2d(nn.Module):
         
         x_spatial = torch.fft.irfft2(out_ft, s=(H, W))
         return x_spatial
+    
+    def compute_curvature_penalty(self):
+        return self.kan_real.compute_curvature_penalty() + self.kan_imag.compute_curvature_penalty()
 
 class PI_KANO(nn.Module):
     def __init__(self, img_size=362, num_angles=1000, num_detectors=513, device='cuda'):
@@ -89,6 +92,13 @@ class PI_KANO(nn.Module):
         reconstruction = self.projection(feat_fused)
         
         return x_init + reconstruction
+    
+    def compute_kan_regularization(self):
+        """ Aggregates the curvature penalty across all GS-KAN layers in the network. """
+        penalty = 0.0
+        penalty += self.spectral_block.compute_curvature_penalty()
+        penalty += self.spatial_block.compute_curvature_penalty()
+        return penalty
 
 if __name__ == "__main__":
     # ==========================================

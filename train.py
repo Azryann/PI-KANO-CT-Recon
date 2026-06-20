@@ -82,7 +82,7 @@ def train_pi_kano(tfrecord_path, epochs=50, batch_size=2, lr=1e-3, device='cuda'
             curve_penalty = model.compute_kan_regularization()
             
             # Hyperparameters for Q1 stability
-            lambda_physics = 0.1
+            lambda_physics = 0.0001
             lambda_curve = 0.01  # Forces the B-splines to remain smooth
             
             # Fused Physics-Informed Loss

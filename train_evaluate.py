@@ -16,51 +16,78 @@ from physics import RadonPhysics
 # SOTA SURROGATE BASELINES (2025)
 # ==========================================
 class PAUM_Surrogate(nn.Module):
-    """ Surrogate for Physics-Aware Unrolled Model (PAUM, 2025). Uses standard CNN cascades. """
+    """ Surrogate for Physics-Aware Unrolled Model (PAUM). Bounded for fair comparison. """
     def __init__(self, img_size, num_angles, num_detectors, num_cascades=3, device='cuda'):
         super().__init__()
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
-        self.tau = nn.Parameter(torch.tensor(1e-3))
         
-        # Standard independent CNN blocks for each cascade (No stateful ODE memory)
+        # Fair Benchmark: Give PAUM the same mathematical stability bound
+        self.tau_max = 2.0 / self._power_iteration(img_size, device)
+        self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
+        
         self.blocks = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(2, 32, 3, padding=1), nn.ReLU(),
-                nn.Conv2d(32, 32, 3, padding=1), nn.ReLU(),
+                nn.Conv2d(2, 32, 3, padding=1), nn.InstanceNorm2d(32), nn.ReLU(),
+                nn.Conv2d(32, 32, 3, padding=1), nn.InstanceNorm2d(32), nn.ReLU(),
                 nn.Conv2d(32, 1, 3, padding=1)
             ) for _ in range(num_cascades)
         ])
 
+    def _power_iteration(self, img_size, device, num_iters=10):
+        u = torch.randn(1, 1, img_size, img_size, device=device)
+        u = u / torch.norm(u)
+        with torch.no_grad():
+            for _ in range(num_iters):
+                v = self.physics.adjoint(self.physics.forward(u))
+                norm_v = torch.norm(v)
+                u = v / norm_v
+        return norm_v.item()
+
     def forward(self, y):
-        x = self.physics.adjoint(y) * self.tau
+        # Strict bound enforcement
+        tau_safe = torch.clamp(self.tau, min=1e-8, max=self.tau_max * 0.99)
+        x = self.physics.adjoint(y) * tau_safe
+        
         for i in range(self.num_cascades):
-            grad = self.physics.adjoint(self.physics.forward(x) - y) * self.tau
+            grad = self.physics.adjoint(self.physics.forward(x) - y) * tau_safe
             update = self.blocks[i](torch.cat([x, grad], dim=1))
             x = x - update
         return x
 
 class JotlasNet_Surrogate(nn.Module):
-    """ Surrogate for JotlasNet (2025). Uses a heavy Unrolled Transformer (Memory Intensive). """
+    """ Surrogate for JotlasNet. Bounded for fair comparison. """
     def __init__(self, img_size, num_angles, num_detectors, num_cascades=2, device='cuda'):
         super().__init__()
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
-        self.tau = nn.Parameter(torch.tensor(1e-3))
         
-        # Transformer blocks (Using MultiheadAttention over flattened patches)
-        self.embed = nn.Conv2d(2, 64, kernel_size=4, stride=4) # Patch embedding
+        self.tau_max = 2.0 / self._power_iteration(img_size, device)
+        self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
+        
+        self.embed = nn.Conv2d(2, 64, kernel_size=4, stride=4) 
         self.transformer = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=256, batch_first=True)
         self.de_embed = nn.ConvTranspose2d(64, 1, kernel_size=4, stride=4)
 
+    def _power_iteration(self, img_size, device, num_iters=10):
+        u = torch.randn(1, 1, img_size, img_size, device=device)
+        u = u / torch.norm(u)
+        with torch.no_grad():
+            for _ in range(num_iters):
+                v = self.physics.adjoint(self.physics.forward(u))
+                norm_v = torch.norm(v)
+                u = v / norm_v
+        return norm_v.item()
+
     def forward(self, y):
-        x = self.physics.adjoint(y) * self.tau
+        tau_safe = torch.clamp(self.tau, min=1e-8, max=self.tau_max * 0.99)
+        x = self.physics.adjoint(y) * tau_safe
+        
         for _ in range(self.num_cascades):
-            grad = self.physics.adjoint(self.physics.forward(x) - y) * self.tau
+            grad = self.physics.adjoint(self.physics.forward(x) - y) * tau_safe
             feat = self.embed(torch.cat([x, grad], dim=1))
             B, C, H, W = feat.shape
             
-            # Flatten for transformer
             feat_flat = feat.view(B, C, -1).permute(0, 2, 1)
             feat_trans = self.transformer(feat_flat)
             feat_trans = feat_trans.permute(0, 2, 1).view(B, C, H, W)
@@ -89,17 +116,15 @@ def compute_metrics(pred, gt):
 def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_size=2, device='cuda'):
     print(f"\n{'='*50}\nStarting Benchmark: {model_name} on {dataset_name.upper()}\n{'='*50}")
     
-    # Dimensions based on dataset
     if dataset_name == 'lodopab':
         img_size, angles, detectors = 362, 1000, 513
         phys_scale = 0.1
-    else: # Mayo Clinic
+    else: 
         img_size, angles, detectors = 512, 736, 736
-        phys_scale = 0.2  # Typical Mayo normalization
+        phys_scale = 0.2
         
     dataloader = get_ct_dataloader(dataset_name, data_path, batch_size=batch_size)
     
-    # Initialize requested model
     if model_name == 'PI_KINN':
         model = PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     elif model_name == 'PAUM':
@@ -124,7 +149,6 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
             
             reconstructions = model(sinograms)
             
-            # Loss Calculation (Data Fidelity + Image Alignment)
             loss = F.mse_loss(reconstructions, ground_truths) + 1e-4 * F.mse_loss(model.physics(reconstructions), sinograms)
             
             loss.backward()
@@ -141,7 +165,6 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
                 print(f"Ep [{epoch+1}/{epochs}] Stp [{batch_idx}] | Loss: {loss.item():.4f} | PSNR: {psnr_val:.2f}dB | SSIM: {ssim_val:.4f}")
                 
             if device == 'cuda' and torch.cuda.get_device_properties(device).total_memory / (1024**3) < 5.0 and steps >= 3:
-                print("Local Prototyping Complete.")
                 break
                 
         scheduler.step()
@@ -151,22 +174,13 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Define Kaggle / Local Paths
     LODOPAB_PATH = "/kaggle/input/datasets/peeeeeg/lodopab/lodopab_full_dose_train.tfrecord"
-    MAYO_PATH = "dummy_mayo.h5" # Replace with actual Kaggle path when available
     
-    # Determine execution mode based on environment
     if os.path.exists(LODOPAB_PATH):
         print("Kaggle environment detected. Commencing SOTA Benchmarking on LoDoPaB-CT...")
-        # 1. Train the Baseline PAUM (Standard CNN)
+        # Train for 5 epochs each to get a definitive benchmark curve
         train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
-        
-        # 2. Train the Baseline JotlasNet (Transformer)
         train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
-        
-        # 3. Train the Proposed PI-KINN (ODE Stateful Network)
-        train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=25, batch_size=2, device=device)
+        train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
     else:
-        print("Local environment detected. Running pipeline verification...")
         train_and_evaluate('PI_KINN', 'lodopab', 'dummy_path.tfrecord', epochs=1, batch_size=1, device=device)

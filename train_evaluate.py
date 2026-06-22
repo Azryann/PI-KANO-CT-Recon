@@ -1,4 +1,5 @@
 import os
+import glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,16 +17,12 @@ from physics import RadonPhysics
 # SOTA SURROGATE BASELINES (2025)
 # ==========================================
 class PAUM_Surrogate(nn.Module):
-    """ Surrogate for Physics-Aware Unrolled Model (PAUM). Bounded for fair comparison. """
     def __init__(self, img_size, num_angles, num_detectors, num_cascades=3, device='cuda'):
         super().__init__()
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
-        
-        # Fair Benchmark: Give PAUM the same mathematical stability bound
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
         self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
-        
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(2, 32, 3, padding=1), nn.InstanceNorm2d(32), nn.ReLU(),
@@ -40,15 +37,12 @@ class PAUM_Surrogate(nn.Module):
         with torch.no_grad():
             for _ in range(num_iters):
                 v = self.physics.adjoint(self.physics.forward(u))
-                norm_v = torch.norm(v)
-                u = v / norm_v
-        return norm_v.item()
+                u = v / torch.norm(v)
+        return torch.norm(v).item()
 
     def forward(self, y):
-        # Strict bound enforcement
         tau_safe = torch.clamp(self.tau, min=1e-8, max=self.tau_max * 0.99)
         x = self.physics.adjoint(y) * tau_safe
-        
         for i in range(self.num_cascades):
             grad = self.physics.adjoint(self.physics.forward(x) - y) * tau_safe
             update = self.blocks[i](torch.cat([x, grad], dim=1))
@@ -56,15 +50,12 @@ class PAUM_Surrogate(nn.Module):
         return x
 
 class JotlasNet_Surrogate(nn.Module):
-    """ Surrogate for JotlasNet. Bounded for fair comparison. """
     def __init__(self, img_size, num_angles, num_detectors, num_cascades=2, device='cuda'):
         super().__init__()
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
-        
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
         self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
-        
         self.embed = nn.Conv2d(2, 64, kernel_size=4, stride=4) 
         self.transformer = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=256, batch_first=True)
         self.de_embed = nn.ConvTranspose2d(64, 1, kernel_size=4, stride=4)
@@ -75,25 +66,19 @@ class JotlasNet_Surrogate(nn.Module):
         with torch.no_grad():
             for _ in range(num_iters):
                 v = self.physics.adjoint(self.physics.forward(u))
-                norm_v = torch.norm(v)
-                u = v / norm_v
-        return norm_v.item()
+                u = v / torch.norm(v)
+        return torch.norm(v).item()
 
     def forward(self, y):
         tau_safe = torch.clamp(self.tau, min=1e-8, max=self.tau_max * 0.99)
         x = self.physics.adjoint(y) * tau_safe
-        
         for _ in range(self.num_cascades):
             grad = self.physics.adjoint(self.physics.forward(x) - y) * tau_safe
             feat = self.embed(torch.cat([x, grad], dim=1))
             B, C, H, W = feat.shape
-            
             feat_flat = feat.view(B, C, -1).permute(0, 2, 1)
-            feat_trans = self.transformer(feat_flat)
-            feat_trans = feat_trans.permute(0, 2, 1).view(B, C, H, W)
-            
-            update = self.de_embed(feat_trans)
-            x = x - update
+            feat_trans = self.transformer(feat_flat).permute(0, 2, 1).view(B, C, H, W)
+            x = x - self.de_embed(feat_trans)
         return x
 
 # ==========================================
@@ -113,15 +98,13 @@ def compute_metrics(pred, gt):
         ssims.append(ssim(p, g, data_range=data_range, win_size=3))
     return np.mean(psnrs), np.mean(ssims)
 
-def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_size=2, device='cuda'):
+def train_and_evaluate(model_name, dataset_name, data_path, epochs=5, batch_size=2, device='cuda'):
     print(f"\n{'='*50}\nStarting Benchmark: {model_name} on {dataset_name.upper()}\n{'='*50}")
     
     if dataset_name == 'lodopab':
-        img_size, angles, detectors = 362, 1000, 513
-        phys_scale = 0.1
+        img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     else: 
-        img_size, angles, detectors = 512, 736, 736
-        phys_scale = 0.2
+        img_size, angles, detectors, phys_scale = 512, 736, 736, 0.2
         
     dataloader = get_ct_dataloader(dataset_name, data_path, batch_size=batch_size)
     
@@ -135,9 +118,30 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
     optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
+    # --- RESUME FROM CHECKPOINT LOGIC ---
+    start_epoch = 0
+    checkpoint_pattern = f"{model_name}_checkpoint_ep*.pth"
+    checkpoints = glob.glob(checkpoint_pattern)
+    
+    if checkpoints:
+        # Find the latest epoch
+        latest_ckpt = max(checkpoints, key=os.path.getctime)
+        print(f"Found checkpoint: {latest_ckpt}. Resuming training...")
+        checkpoint = torch.load(latest_ckpt, map_location=device)
+        
+        model.load_state_dict(checkpoint['model_state'])
+        optimizer.load_state_dict(checkpoint['optimizer_state'])
+        scheduler.load_state_dict(checkpoint['scheduler_state'])
+        start_epoch = checkpoint['epoch']
+        print(f"Successfully resumed from Epoch {start_epoch}.")
+    
+    if start_epoch >= epochs:
+        print(f"Model {model_name} has already completed {epochs} epochs. Skipping.")
+        return
+
     print(f"Total Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss, epoch_psnr, epoch_ssim = 0.0, 0.0, 0.0
         steps = 0
@@ -148,7 +152,6 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
             optimizer.zero_grad()
             
             reconstructions = model(sinograms)
-            
             loss = F.mse_loss(reconstructions, ground_truths) + 1e-4 * F.mse_loss(model.physics(reconstructions), sinograms)
             
             loss.backward()
@@ -168,9 +171,20 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=10, batch_siz
                 break
                 
         scheduler.step()
+        
+        # --- SAVE CHECKPOINT AFTER EPOCH ---
+        checkpoint_path = f"{model_name}_checkpoint_ep{epoch+1}.pth"
+        torch.save({
+            'epoch': epoch + 1,
+            'model_state': model.state_dict(),
+            'optimizer_state': optimizer.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
+        }, checkpoint_path)
+        
         epoch_time = time.time() - start_time
         print(f"\n--- {model_name} Epoch {epoch+1} Summary ---")
-        print(f"Time: {epoch_time:.1f}s | Avg PSNR: {epoch_psnr/steps:.2f}dB | Avg SSIM: {epoch_ssim/steps:.4f}\n")
+        print(f"Time: {epoch_time:.1f}s | Avg PSNR: {epoch_psnr/steps:.2f}dB | Avg SSIM: {epoch_ssim/steps:.4f}")
+        print(f"Checkpoint saved to {checkpoint_path}\n")
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -178,7 +192,6 @@ if __name__ == "__main__":
     
     if os.path.exists(LODOPAB_PATH):
         print("Kaggle environment detected. Commencing SOTA Benchmarking on LoDoPaB-CT...")
-        # Train for 5 epochs each to get a definitive benchmark curve
         train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
         train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
         train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)

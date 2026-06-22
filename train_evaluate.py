@@ -56,6 +56,7 @@ class JotlasNet_Surrogate(nn.Module):
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
         self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
+        
         self.embed = nn.Conv2d(2, 64, kernel_size=4, stride=4) 
         self.transformer = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=256, batch_first=True)
         self.de_embed = nn.ConvTranspose2d(64, 1, kernel_size=4, stride=4)
@@ -72,13 +73,29 @@ class JotlasNet_Surrogate(nn.Module):
     def forward(self, y):
         tau_safe = torch.clamp(self.tau, min=1e-8, max=self.tau_max * 0.99)
         x = self.physics.adjoint(y) * tau_safe
+        
+        B, C_orig, H_orig, W_orig = x.shape
+        
         for _ in range(self.num_cascades):
             grad = self.physics.adjoint(self.physics.forward(x) - y) * tau_safe
+            
+            # Patch Embedding
             feat = self.embed(torch.cat([x, grad], dim=1))
-            B, C, H, W = feat.shape
-            feat_flat = feat.view(B, C, -1).permute(0, 2, 1)
-            feat_trans = self.transformer(feat_flat).permute(0, 2, 1).view(B, C, H, W)
-            x = x - self.de_embed(feat_trans)
+            B_f, C_f, H_f, W_f = feat.shape
+            
+            # Transformer processing
+            feat_flat = feat.view(B_f, C_f, -1).permute(0, 2, 1)
+            feat_trans = self.transformer(feat_flat).permute(0, 2, 1).view(B_f, C_f, H_f, W_f)
+            
+            # De-embedding
+            update = self.de_embed(feat_trans)
+            
+            # FIX: Force the update to match the exact original image dimensions
+            if update.shape[-2:] != (H_orig, W_orig):
+                update = F.interpolate(update, size=(H_orig, W_orig), mode='bilinear', align_corners=False)
+                
+            x = x - update
+            
         return x
 
 # ==========================================

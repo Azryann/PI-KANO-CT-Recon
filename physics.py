@@ -16,16 +16,18 @@ class FourierSlicePhysics(nn.Module):
         self.device = device
         
         # PyTorch linspace fix: Create angles from 0 to Pi (excluding Pi)
-        # We step from 0 up to Pi * (num_angles - 1) / num_angles
         end_angle = np.pi * (num_angles - 1) / num_angles
         theta = torch.linspace(0, end_angle, num_angles, device=device)
         omega = torch.linspace(-1.0, 1.0, num_detectors, device=device)
         
-        Omega, Theta = torch.meshgrid(omega, theta, indexing='xy')
+        # FIX: Use 'ij' indexing so output is strictly (Angles, Detectors)
+        Theta, Omega = torch.meshgrid(theta, omega, indexing='ij')
         
         kx = Omega * torch.cos(Theta)
         ky = Omega * torch.sin(Theta)
-        self.polar_grid = torch.stack([kx, ky], dim=-1).unsqueeze(0).transpose(1, 2)
+        
+        # Grid shape: (1, Angles, Detectors, 2) -> (1, 1000, 513, 2)
+        self.polar_grid = torch.stack([kx, ky], dim=-1).unsqueeze(0)
         print("Fourier-Slice Edge-Physics Initialized. (ASTRA bypassed).")
 
     def forward(self, x):
@@ -40,6 +42,8 @@ class FourierSlicePhysics(nn.Module):
         
         polar_freq = torch.complex(polar_real, polar_imag)
         polar_freq = torch.fft.ifftshift(polar_freq, dim=-1)
+        
+        # Output shape is now strictly (B, C, 1000, 513)
         return torch.fft.ifft(polar_freq, dim=-1).real
 
     def adjoint(self, y):
@@ -50,10 +54,11 @@ class FourierSlicePhysics(nn.Module):
         Y_filtered = Y_freq * omega.view(1, 1, 1, -1)
         y_filtered = torch.fft.ifft(torch.fft.ifftshift(Y_filtered, dim=-1), dim=-1).real
         
+        # Create reconstruction grid
         x_grid, y_grid = torch.meshgrid(
             torch.linspace(-1, 1, self.img_size, device=y.device),
             torch.linspace(-1, 1, self.img_size, device=y.device),
-            indexing='xy'
+            indexing='ij'
         )
         
         end_angle = np.pi * (Angles - 1) / Angles
@@ -63,11 +68,16 @@ class FourierSlicePhysics(nn.Module):
         for i in range(Angles):
             t = x_grid * torch.cos(theta[i]) + y_grid * torch.sin(theta[i])
             t_norm = t / 1.414 
+            
+            # Grid shape: (B, img_size, img_size, 2)
             grid = torch.stack([t_norm, torch.zeros_like(t_norm)], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
             
+            # Proj shape: (B, C, 1, Detectors)
             proj = y_filtered[:, :, i, :].unsqueeze(2) 
+            
+            # Backproj shape: (B, C, img_size, img_size)
             backproj = F.grid_sample(proj, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
-            reconstruction += backproj.squeeze(2)
+            reconstruction += backproj
             
         return reconstruction * (np.pi / Angles)
 

@@ -15,8 +15,12 @@ class FourierSlicePhysics(nn.Module):
         self.num_detectors = num_detectors
         self.device = device
         
-        theta = torch.linspace(0, np.pi, num_angles, endpoint=False, device=device)
+        # PyTorch linspace fix: Create angles from 0 to Pi (excluding Pi)
+        # We step from 0 up to Pi * (num_angles - 1) / num_angles
+        end_angle = np.pi * (num_angles - 1) / num_angles
+        theta = torch.linspace(0, end_angle, num_angles, device=device)
         omega = torch.linspace(-1.0, 1.0, num_detectors, device=device)
+        
         Omega, Theta = torch.meshgrid(omega, theta, indexing='xy')
         
         kx = Omega * torch.cos(Theta)
@@ -52,7 +56,8 @@ class FourierSlicePhysics(nn.Module):
             indexing='xy'
         )
         
-        theta = torch.linspace(0, np.pi, Angles, endpoint=False, device=y.device)
+        end_angle = np.pi * (Angles - 1) / Angles
+        theta = torch.linspace(0, end_angle, Angles, device=y.device)
         reconstruction = torch.zeros(B, C, self.img_size, self.img_size, device=y.device)
         
         for i in range(Angles):

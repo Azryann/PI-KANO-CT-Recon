@@ -11,7 +11,7 @@ import time
 # Import our custom modules
 from dataloaders import get_ct_dataloader
 from pi_kinn import PI_KINN
-from physics import RadonPhysics
+from physics import FourierSlicePhysics as RadonPhysics
 
 # ==========================================
 # SOTA SURROGATE BASELINES (2025)
@@ -22,7 +22,7 @@ class PAUM_Surrogate(nn.Module):
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
-        self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
+        self.tau = nn.Parameter(torch.tensor(1.0))
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(2, 32, 3, padding=1), nn.InstanceNorm2d(32), nn.ReLU(),
@@ -55,7 +55,7 @@ class JotlasNet_Surrogate(nn.Module):
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
-        self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
+        self.tau = nn.Parameter(torch.tensor(1.0))
         
         self.embed = nn.Conv2d(2, 64, kernel_size=4, stride=4) 
         self.transformer = nn.TransformerEncoderLayer(d_model=64, nhead=4, dim_feedforward=256, batch_first=True)

@@ -30,26 +30,22 @@ class FourierSlicePhysics(nn.Module):
         # ==========================================
         # 2. PRE-COMPUTE ADJOINT GRID (Cartesian -> Polar)
         # ==========================================
+        # FIX: Restored 'ij' indexing to prevent 90-degree image transposition!
         x_grid, y_grid = torch.meshgrid(
             torch.linspace(-1.0, 1.0, img_size, device=device),
             torch.linspace(-1.0, 1.0, img_size, device=device),
-            indexing='xy'
+            indexing='ij'
         )
         
-        x_flat = x_grid.reshape(-1)
-        y_flat = y_grid.reshape(-1)
-        
-        # Shape: (Angles, N_Pixels)
-        t = x_flat.unsqueeze(0) * torch.cos(theta).unsqueeze(1) + y_flat.unsqueeze(0) * torch.sin(theta).unsqueeze(1)
-        
-        # Save normalized coordinates for the Batched 1D interpolation
+        # Shape: (Angles, img_size, img_size)
+        t = x_grid.unsqueeze(0) * torch.cos(theta).view(-1, 1, 1) + y_grid.unsqueeze(0) * torch.sin(theta).view(-1, 1, 1)
         self.t_norm = t / 1.41421356  
         
         # Pre-compute ramp filter
         omega_filter = torch.abs(torch.linspace(-1.0, 1.0, num_detectors, device=device))
         self.omega_filter = omega_filter.view(1, 1, 1, -1)
         
-        print("Fully Vectorized 1D Fourier-Slice Physics Initialized. (No Blurring!).")
+        print("Fully Vectorized Fourier-Slice Physics Initialized. (Golden Geometry Restored).")
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -74,20 +70,20 @@ class FourierSlicePhysics(nn.Module):
         y_filtered = torch.fft.ifft(torch.fft.ifftshift(Y_filtered, dim=-1), dim=-1).real
         
         # 2. Exact Batched 1D Vectorized Backprojection
-        # Fold Angles into Batch dimension to prevent cross-angle interpolation blurring
-        y_reshaped = y_filtered.view(B * Angles, C, 1, Detectors)
+        # Safely fold Angles into Batch dimension
+        y_reshaped = y_filtered.permute(0, 2, 1, 3).reshape(B * Angles, C, 1, Detectors)
         
-        # Expand pre-computed grid to match (B * Angles)
-        t_batch = self.t_norm.unsqueeze(0).expand(B, -1, -1).reshape(B * Angles, -1)
+        # Expand grid to match (B * Angles, img_size, img_size)
+        t_batch = self.t_norm.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * Angles, self.img_size, self.img_size)
         y_coords = torch.zeros_like(t_batch)
         
-        # Grid shape: (B * Angles, 1, N_Pixels, 2)
-        grid = torch.stack([t_batch, y_coords], dim=-1).unsqueeze(1)
+        # Grid shape: (B*Angles, img_size, img_size, 2)
+        grid = torch.stack([t_batch, y_coords], dim=-1)
         
-        # Pure 1D interpolation along the detector array
+        # Pure 1D interpolation
         sampled = F.grid_sample(y_reshaped, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
         
-        # 3. Sum over angles and reshape back to images
+        # 3. Reshape back and sum over angles
         sampled = sampled.view(B, Angles, C, self.img_size, self.img_size)
         reconstruction = sampled.sum(dim=1) * (np.pi / Angles)
             

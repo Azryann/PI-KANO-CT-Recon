@@ -151,6 +151,6 @@ if __name__ == "__main__":
         # train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
         
         # Run PI-KINN immediately
-        train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
+        train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
     else:
         train_and_evaluate('PI_KINN', 'lodopab', 'dummy_path.tfrecord', epochs=1, batch_size=1, device=device)

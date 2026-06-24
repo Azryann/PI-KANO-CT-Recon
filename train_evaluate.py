@@ -144,8 +144,13 @@ if __name__ == "__main__":
     LODOPAB_PATH = "/kaggle/input/datasets/peeeeeg/lodopab/lodopab_full_dose_train.tfrecord"
     
     if os.path.exists(LODOPAB_PATH):
-        train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
-        train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
+        print("Kaggle environment detected. Commencing SOTA Benchmarking on LoDoPaB-CT...")
+        
+        # We commented out the baselines to prioritize our proposed model!
+        # train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
+        # train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
+        
+        # Run PI-KINN immediately
         train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
     else:
         train_and_evaluate('PI_KINN', 'lodopab', 'dummy_path.tfrecord', epochs=1, batch_size=1, device=device)

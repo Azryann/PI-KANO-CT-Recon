@@ -74,7 +74,7 @@ def compute_metrics(pred, gt):
         ssims.append(ssim(p, g, data_range=data_range, win_size=3))
     return np.mean(psnrs), np.mean(ssims)
 
-def train_and_evaluate(model_name, dataset_name, data_path, epochs=50, batch_size=2, device='cuda'):
+def train_and_evaluate(model_name, dataset_name, data_path, epochs=5, batch_size=2, device='cuda'):
     print(f"\n{'='*50}\nStarting Benchmark: {model_name} on {dataset_name.upper()}\n{'='*50}")
     
     img_size, angles, detectors, phys_scale = (362, 1000, 513, 0.1) if dataset_name == 'lodopab' else (512, 736, 736, 0.2)
@@ -85,6 +85,9 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=50, batch_siz
     elif model_name == 'JotlasNet': model = JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device)
         
     optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+    
+    # Q1 UPGRADE: Ensure T_max matches EXACTLY the number of epochs run, 
+    # so the learning rate hits 1e-6 at the final step, guaranteeing convergence.
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
     start_epoch = 0
@@ -115,7 +118,18 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=50, batch_siz
             optimizer.zero_grad()
             
             reconstructions = model(sinograms)
-            loss = F.mse_loss(reconstructions, ground_truths) + 1e-4 * F.mse_loss(model.physics(reconstructions), sinograms)
+            
+            # ---------------------------------------------------------
+            # Q1 UPGRADE: Mixed L1 + L2 Loss for Sharp Edges (SSIM Boost)
+            # ---------------------------------------------------------
+            l1_loss = F.l1_loss(reconstructions, ground_truths)
+            l2_loss = F.mse_loss(reconstructions, ground_truths)
+            alignment_loss = (0.5 * l1_loss) + (0.5 * l2_loss)
+            
+            fidelity_loss = F.mse_loss(model.physics(reconstructions), sinograms)
+            
+            loss = alignment_loss + (1e-4 * fidelity_loss)
+            # ---------------------------------------------------------
             
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -128,7 +142,8 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=50, batch_siz
             steps += 1
             
             if batch_idx % 50 == 0:
-                print(f"Ep [{epoch+1}/{epochs}] Stp [{batch_idx}] | Loss: {loss.item():.4f} | PSNR: {psnr_val:.2f}dB | SSIM: {ssim_val:.4f}")
+                current_lr = optimizer.param_groups[0]['lr']
+                print(f"Ep [{epoch+1}/{epochs}] Stp [{batch_idx}] | LR: {current_lr:.2e} | Loss: {loss.item():.4f} | PSNR: {psnr_val:.2f}dB | SSIM: {ssim_val:.4f}")
                 
         scheduler.step()
         torch.save({

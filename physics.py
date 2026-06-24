@@ -6,7 +6,7 @@ import numpy as np
 class FourierSlicePhysics(nn.Module):
     """
     Differentiable Fourier Slice Theorem (DFST) Operator.
-    Fully Vectorized. 100% Native PyTorch. Edge-Device Deployable.
+    Fully Vectorized 1D Interpolation. 100% Native PyTorch. Edge-Device Deployable.
     """
     def __init__(self, img_size=362, num_angles=1000, num_detectors=513, device='cuda'):
         super().__init__()
@@ -25,8 +25,6 @@ class FourierSlicePhysics(nn.Module):
         Theta, Omega = torch.meshgrid(theta, omega, indexing='ij')
         kx = Omega * torch.cos(Theta)
         ky = Omega * torch.sin(Theta)
-        
-        # Grid shape: (1, Angles, Detectors, 2)
         self.polar_grid = torch.stack([kx, ky], dim=-1).unsqueeze(0)
         
         # ==========================================
@@ -38,26 +36,20 @@ class FourierSlicePhysics(nn.Module):
             indexing='xy'
         )
         
-        # Flatten spatial dimensions to vectorize the 1000 angles
         x_flat = x_grid.reshape(-1)
         y_flat = y_grid.reshape(-1)
         
-        # Compute projection coordinates for all angles and all pixels simultaneously
         # Shape: (Angles, N_Pixels)
         t = x_flat.unsqueeze(0) * torch.cos(theta).unsqueeze(1) + y_flat.unsqueeze(0) * torch.sin(theta).unsqueeze(1)
-        t_norm = t / 1.41421356  # Normalize to [-1, 1]
         
-        # Y-coordinate in grid_sample represents the Angle index mapped to [-1, 1]
-        angle_y = torch.linspace(-1.0, 1.0, num_angles, device=device).unsqueeze(1).expand(num_angles, img_size * img_size)
-        
-        # Grid shape: (1, Angles, N_Pixels, 2)
-        self.bp_grid = torch.stack([t_norm, angle_y], dim=-1).unsqueeze(0)
+        # Save normalized coordinates for the Batched 1D interpolation
+        self.t_norm = t / 1.41421356  
         
         # Pre-compute ramp filter
         omega_filter = torch.abs(torch.linspace(-1.0, 1.0, num_detectors, device=device))
         self.omega_filter = omega_filter.view(1, 1, 1, -1)
         
-        print("Fully Vectorized Fourier-Slice Physics Initialized. (Zero Python Loops).")
+        print("Fully Vectorized 1D Fourier-Slice Physics Initialized. (No Blurring!).")
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -81,17 +73,25 @@ class FourierSlicePhysics(nn.Module):
         Y_filtered = Y_freq * self.omega_filter
         y_filtered = torch.fft.ifft(torch.fft.ifftshift(Y_filtered, dim=-1), dim=-1).real
         
-        # 2. Vectorized Backprojection (A single GPU call replaces 1000 loops!)
-        grid = self.bp_grid.expand(B, -1, -1, -1)
+        # 2. Exact Batched 1D Vectorized Backprojection
+        # Fold Angles into Batch dimension to prevent cross-angle interpolation blurring
+        y_reshaped = y_filtered.view(B * Angles, C, 1, Detectors)
         
-        # Sample shape: (B, C, Angles, N_Pixels)
-        sampled = F.grid_sample(y_filtered, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
+        # Expand pre-computed grid to match (B * Angles)
+        t_batch = self.t_norm.unsqueeze(0).expand(B, -1, -1).reshape(B * Angles, -1)
+        y_coords = torch.zeros_like(t_batch)
         
-        # 3. Sum over angles and reshape
-        reconstruction = sampled.sum(dim=2)  # Shape: (B, C, N_Pixels)
-        reconstruction = reconstruction.view(B, C, self.img_size, self.img_size) * (np.pi / Angles)
+        # Grid shape: (B * Angles, 1, N_Pixels, 2)
+        grid = torch.stack([t_batch, y_coords], dim=-1).unsqueeze(1)
+        
+        # Pure 1D interpolation along the detector array
+        sampled = F.grid_sample(y_reshaped, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
+        
+        # 3. Sum over angles and reshape back to images
+        sampled = sampled.view(B, Angles, C, self.img_size, self.img_size)
+        reconstruction = sampled.sum(dim=1) * (np.pi / Angles)
             
         return reconstruction
 
-# ALIAS for compatibility with existing scripts
+# ALIAS
 RadonPhysics = FourierSlicePhysics

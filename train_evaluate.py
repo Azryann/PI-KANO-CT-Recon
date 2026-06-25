@@ -119,17 +119,10 @@ def train_and_evaluate(model_name, dataset_name, data_path, epochs=5, batch_size
             
             reconstructions = model(sinograms)
             
-            # ---------------------------------------------------------
-            # Q1 UPGRADE: Mixed L1 + L2 Loss for Sharp Edges (SSIM Boost)
-            # ---------------------------------------------------------
-            l1_loss = F.l1_loss(reconstructions, ground_truths)
-            l2_loss = F.mse_loss(reconstructions, ground_truths)
-            alignment_loss = (0.5 * l1_loss) + (0.5 * l2_loss)
-            
+            # FIX: Reverted to pure MSE to mathematically guarantee PSNR maximization
+            alignment_loss = F.mse_loss(reconstructions, ground_truths)
             fidelity_loss = F.mse_loss(model.physics(reconstructions), sinograms)
-            
             loss = alignment_loss + (1e-4 * fidelity_loss)
-            # ---------------------------------------------------------
             
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

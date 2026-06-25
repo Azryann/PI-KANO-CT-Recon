@@ -11,8 +11,6 @@ class PI_KINN(nn.Module):
         self.hidden_channels = 32
         
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
-        
-        # Fourier Slice Theorem is naturally bounded by 1.0. No power iteration needed!
         self.step_size = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
         
         self.lifting = nn.Conv2d(2, self.hidden_channels, kernel_size=3, padding=1)
@@ -20,29 +18,29 @@ class PI_KINN(nn.Module):
         self.projection = nn.Conv2d(self.hidden_channels, 1, kernel_size=3, padding=1)
 
     def forward(self, y):
-            B, C, Angles, Detectors = y.shape
-            H = W = self.physics.img_size
+        B, C, Angles, Detectors = y.shape
+        H = W = self.physics.img_size
+        tau = torch.clamp(self.step_size, min=1e-4, max=2.0)
+        
+        x_k = self.physics.adjoint(y) * tau
+        # FIX: Clamp physical initialization
+        x_k = torch.clamp(x_k, min=0.0) 
+        
+        v_state = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
+        
+        for i in range(self.num_cascades):
+            Ax = self.physics.forward(x_k)
+            residual = Ax - y
+            physics_grad = self.physics.adjoint(residual) * tau
             
-            tau = torch.clamp(self.step_size, min=1e-4, max=2.0)
+            current_I = self.lifting(torch.cat([x_k, physics_grad], dim=1))
+            v_state = self.kinn_cell(current_I, v_state)
+            update = self.projection(v_state)
             
-            x_k = self.physics.adjoint(y) * tau
-            v_state = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
+            # FIX: Clamp INSIDE the loop so physics never sees negative mass
+            x_k = torch.clamp(x_k - update, min=0.0)
             
-            for i in range(self.num_cascades):
-                Ax = self.physics.forward(x_k)
-                residual = Ax - y
-                physics_grad = self.physics.adjoint(residual) * tau
-                
-                current_I = self.lifting(torch.cat([x_k, physics_grad], dim=1))
-                v_state = self.kinn_cell(current_I, v_state)
-                update = self.projection(v_state)
-                x_k = x_k - update
-                
-            # Q1 UPGRADE: Strict Physical Clamping
-            # CT attenuation cannot be negative. This prevents massive PSNR penalties.
-            x_k = torch.clamp(x_k, min=0.0, max=1.5)
-                
-            return x_k
+        return x_k
 
 if __name__ == "__main__":
     # ==========================================

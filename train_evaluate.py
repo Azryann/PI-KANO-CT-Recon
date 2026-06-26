@@ -154,11 +154,15 @@ if __name__ == "__main__":
     if os.path.exists(LODOPAB_PATH):
         print("Kaggle environment detected. Commencing SOTA Benchmarking on LoDoPaB-CT...")
         
-        # We commented out the baselines to prioritize our proposed model!
-        # train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
-        # train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=50, batch_size=2, device=device)
+        # 1. Train PAUM (Will resume from Epoch 1 if the checkpoint is in the folder, or start fresh)
+        train_and_evaluate('PAUM', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
         
-        # Run PI-KINN immediately
+        # 2. Train JotlasNet (Will start fresh)
+        train_and_evaluate('JotlasNet', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
+        
+        # 3. PI-KINN is already done! 
+        # Because of our checkpoint system, if you leave this here and the ep5.pth file is in the folder, 
+        # it will just print "Model PI_KINN has already completed 5 epochs. Skipping."
         train_and_evaluate('PI_KINN', 'lodopab', LODOPAB_PATH, epochs=5, batch_size=2, device=device)
     else:
         train_and_evaluate('PI_KINN', 'lodopab', 'dummy_path.tfrecord', epochs=1, batch_size=1, device=device)

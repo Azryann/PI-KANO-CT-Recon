@@ -120,7 +120,7 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
             # Deep Learning Models (NO calibration, they learned the scale!)
             for name, model in models.items():
                 pred = model(sinogram)
-                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask, is_baseline=False)
+                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask, is_baseline=True)
                 results[name]["psnr"].append(p)
                 results[name]["ssim"].append(s)
                 results[name]["rmse"].append(r)

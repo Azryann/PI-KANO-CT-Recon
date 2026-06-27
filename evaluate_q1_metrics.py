@@ -9,26 +9,24 @@ from pi_kinn import PI_KINN
 from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
 from physics import RadonPhysics
 
-def calibrate_tensor(pred, gt):
-    """
-    Global Affine Calibration (Least Squares Fit).
-    Corrects the global physics scaling mismatch before HU conversion,
-    revealing the true structural fidelity of the reconstruction.
-    """
-    p = pred.flatten()
-    g = gt.flatten()
-    
-    p_mean = p.mean()
-    g_mean = g.mean()
+def create_circular_mask(h, w):
+    """ Standard CT Field-of-View (FOV) Mask to ignore corner artifacts. """
+    center = (int(w/2), int(h/2))
+    radius = min(center[0], center[1], w-center[0], h-center[1])
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
+    mask = dist_from_center <= radius
+    return torch.tensor(mask, dtype=torch.float32)
+
+def calibrate_baseline(pred, gt, mask):
+    """ Only used for the untrained FBP baseline to find the global scale. """
+    p = pred[mask > 0]
+    g = gt[mask > 0]
+    p_mean, g_mean = p.mean(), g.mean()
     p_var = p.var()
-    
-    if p_var < 1e-8:
-        return pred - p_mean + g_mean
-        
-    # y = mx + c
+    if p_var < 1e-8: return pred
     m = torch.mean((p - p_mean) * (g - g_mean)) / p_var
     c = g_mean - m * p_mean
-    
     return m * pred + c
 
 def mu_to_hu(mu_tensor):
@@ -38,37 +36,49 @@ def mu_to_hu(mu_tensor):
 def apply_clinical_window(hu_tensor):
     # Strict Q1 clinical lung window: [-1000, 400] HU
     clipped = torch.clamp(hu_tensor, min=-1000.0, max=400.0)
-    # Normalize to [0, 1]
     return (clipped + 1000.0) / 1400.0
 
-def compute_q1_metrics(pred_mu, gt_mu):
-    # 1. Calibrate the physics scale
-    pred_calibrated = calibrate_tensor(pred_mu, gt_mu)
+def compute_q1_metrics(pred_mu, gt_mu, mask, is_baseline=False):
+    # 1. Only calibrate FBP. Trained models already learned the scale!
+    if is_baseline:
+        pred_mu = calibrate_baseline(pred_mu, gt_mu, mask)
     
     # 2. Convert to HU
-    pred_hu = mu_to_hu(pred_calibrated)
+    pred_hu = mu_to_hu(pred_mu)
     gt_hu = mu_to_hu(gt_mu)
     
-    rmse_hu = torch.sqrt(torch.mean((pred_hu - gt_hu) ** 2)).item()
+    # 3. Apply FOV Mask to HU tensors
+    pred_hu = pred_hu * mask
+    gt_hu = gt_hu * mask
     
-    # 3. Apply Clinical Window
-    pred_norm = apply_clinical_window(pred_hu).detach().cpu().squeeze().numpy()
-    gt_norm = apply_clinical_window(gt_hu).detach().cpu().squeeze().numpy()
+    # Calculate RMSE inside the mask
+    rmse_hu = torch.sqrt(torch.sum((pred_hu - gt_hu)**2) / torch.sum(mask)).item()
     
-    # 4. Calculate Metrics
-    mse_norm = np.mean((pred_norm - gt_norm) ** 2)
+    # 4. Apply Clinical Window [-1000, 400] -> [0, 1]
+    pred_norm = apply_clinical_window(pred_hu) * mask
+    gt_norm = apply_clinical_window(gt_hu) * mask
+    
+    p_np = pred_norm.detach().cpu().squeeze().numpy()
+    g_np = gt_norm.detach().cpu().squeeze().numpy()
+    m_np = mask.detach().cpu().squeeze().numpy()
+    
+    # 5. Calculate Metrics strictly inside the mask
+    mse_norm = np.sum(((p_np - g_np)**2) * m_np) / np.sum(m_np)
     psnr = 10 * np.log10(1.0**2 / (mse_norm + 1e-8))
-    ssim_val = ssim(pred_norm, gt_norm, data_range=1.0)
+    
+    # SSIM is computed on the whole image (mask sets background to 0, which is standard)
+    ssim_val = ssim(p_np, g_np, data_range=1.0)
     
     return psnr, ssim_val, rmse_hu
 
 def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
-    print(f"\n{'='*65}\nStarting Q1 Clinical Evaluation (Calibrated HU Window)\n{'='*65}")
+    print(f"\n{'='*65}\nStarting Q1 Clinical Evaluation (Masked HU Window)\n{'='*65}")
     
     img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     dataloader = get_ct_dataloader('lodopab', data_path, batch_size=1)
     
     physics = RadonPhysics(img_size, angles, detectors, device=device)
+    fov_mask = create_circular_mask(img_size, img_size).to(device)
     
     models = {
         "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
@@ -99,17 +109,17 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
             sinogram = sinogram.to(device) / phys_scale
             gt = gt.to(device) / phys_scale
             
-            # FBP
+            # FBP (Needs calibration)
             fbp_pred = physics.adjoint(sinogram)
-            p, s, r = compute_q1_metrics(fbp_pred * phys_scale, gt * phys_scale)
+            p, s, r = compute_q1_metrics(fbp_pred * phys_scale, gt * phys_scale, fov_mask, is_baseline=True)
             results["FBP (Baseline)"]["psnr"].append(p)
             results["FBP (Baseline)"]["ssim"].append(s)
             results["FBP (Baseline)"]["rmse"].append(r)
             
-            # Deep Learning Models
+            # Deep Learning Models (NO calibration, they learned the scale!)
             for name, model in models.items():
                 pred = model(sinogram)
-                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale)
+                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask, is_baseline=False)
                 results[name]["psnr"].append(p)
                 results[name]["ssim"].append(s)
                 results[name]["rmse"].append(r)

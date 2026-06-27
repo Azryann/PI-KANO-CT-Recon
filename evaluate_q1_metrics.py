@@ -322,12 +322,11 @@ def evaluate_all_models(data_path:        str,
         log.info(f"GPU: {torch.cuda.get_device_name(0)}")
 
     # ── Dataloader ────────────────────────────────────────────
+    # ── Dataloader ────────────────────────────────────────────
     dataloader = get_ct_dataloader(
         dataset_name="lodopab",
         data_path=data_path,
-        batch_size=batch_size,
-        split="test",
-        shuffle=False           # deterministic order for reproducibility
+        batch_size=batch_size
     )
     log.info(f"Test samples requested: {num_test_samples}")
 
@@ -600,8 +599,9 @@ def resume_training(model_name:     str,
         return
 
     # ── Dataloader ────────────────────────────────────────────
+    # ── Dataloader ────────────────────────────────────────────
     train_loader = get_ct_dataloader(
-        "lodopab", data_path, batch_size=batch_size, split="train", shuffle=True
+        "lodopab", data_path, batch_size=batch_size
     )
 
     # ── Physics + mask ────────────────────────────────────────

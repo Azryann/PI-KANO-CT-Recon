@@ -89,7 +89,7 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
         "FBP (Baseline)": {"psnr": [], "ssim": [], "rmse": []},
         "PAUM": {"psnr": [], "ssim": [], "rmse": []},
         "JotlasNet": {"psnr": [], "ssim": [], "rmse": []},
-        "PI-KINN (Ours)": {"psnr": [], "ssim": [], "rmse": []}
+        "PI_KINN (Ours)": {"psnr": [], "ssim": [], "rmse": []}
     }
     
     with torch.no_grad():

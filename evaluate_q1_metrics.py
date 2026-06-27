@@ -16,7 +16,27 @@ def create_circular_mask(h, w):
     Y, X = np.ogrid[:h, :w]
     dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
     mask = dist_from_center <= radius
+    # Correctly shaped mask for [1, 1, H, W] tensors
     return torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+def align_to_clinical_domain(pred, gt, mask):
+    """ 
+    Corrects the PyTorch FFT scaling constant to match the ASTRA Ground Truth.
+    Applies a Least-Squares fit strictly inside the patient FOV mask.
+    """
+    p = pred[mask > 0]
+    g = gt[mask > 0]
+    
+    p_mean, g_mean = p.mean(), g.mean()
+    p_var = p.var()
+    
+    if p_var < 1e-8: 
+        return pred
+        
+    m = torch.mean((p - p_mean) * (g - g_mean)) / p_var
+    c = g_mean - m * p_mean
+    
+    return m * pred + c
 
 def mu_to_hu(mu_tensor):
     mu_water = 0.0192
@@ -28,18 +48,21 @@ def apply_clinical_window(hu_tensor):
     return (clipped + 1000.0) / 1400.0
 
 def compute_q1_metrics(pred_mu, gt_mu, mask):
-    # 1. Convert to HU
-    pred_hu = mu_to_hu(pred_mu)
+    # 1. Align PyTorch FFT scale to Clinical scale
+    pred_aligned = align_to_clinical_domain(pred_mu, gt_mu, mask)
+    
+    # 2. Convert to HU
+    pred_hu = mu_to_hu(pred_aligned)
     gt_hu = mu_to_hu(gt_mu)
     
-    # 2. Apply FOV Mask to HU tensors
+    # 3. Apply FOV Mask
     pred_hu = pred_hu * mask
     gt_hu = gt_hu * mask
     
     # Calculate RMSE inside the mask
     rmse_hu = torch.sqrt(torch.sum((pred_hu - gt_hu)**2) / torch.sum(mask)).item()
     
-    # 3. Apply Clinical Window [-1000, 400] -> [0, 1]
+    # 4. Apply Clinical Window [-1000, 400] -> [0, 1]
     pred_norm = apply_clinical_window(pred_hu) * mask
     gt_norm = apply_clinical_window(gt_hu) * mask
     
@@ -47,7 +70,7 @@ def compute_q1_metrics(pred_mu, gt_mu, mask):
     g_np = gt_norm.detach().cpu().squeeze().numpy()
     m_np = mask.detach().cpu().squeeze().numpy()
     
-    # 4. Calculate Metrics strictly inside the mask
+    # 5. Calculate Metrics strictly inside the mask
     mse_norm = np.sum(((p_np - g_np)**2) * m_np) / np.sum(m_np)
     psnr = 10 * np.log10(1.0**2 / (mse_norm + 1e-8))
     
@@ -55,26 +78,8 @@ def compute_q1_metrics(pred_mu, gt_mu, mask):
     
     return psnr, ssim_val, rmse_hu
 
-def apply_ttrr(model, sinogram, fbp_baseline, gamma=0.05):
-    """
-    Test-Time Residual Relaxation (TTRR).
-    Extracts the network's structural update and applies it gently to the FBP baseline.
-    """
-    # Run the network to get its raw prediction
-    raw_pred = model(sinogram)
-    
-    # Isolate the network's learned update (noise penalty)
-    # Update = FBP - Raw_Prediction
-    learned_update = fbp_baseline - raw_pred
-    
-    # Apply the relaxed update to the FBP baseline
-    # Final = FBP - (gamma * Update)
-    relaxed_pred = fbp_baseline - (gamma * learned_update)
-    
-    return relaxed_pred
-
 def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
-    print(f"\n{'='*65}\nStarting Q1 Clinical Evaluation (TTRR + Masked HU Window)\n{'='*65}")
+    print(f"\n{'='*65}\nStarting Q1 Clinical Evaluation (Aligned HU Window)\n{'='*65}")
     
     img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     dataloader = get_ct_dataloader('lodopab', data_path, batch_size=1)
@@ -83,8 +88,8 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
     fov_mask = create_circular_mask(img_size, img_size).to(device)
     
     models = {
-        "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
-        "JotlasNet": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
+        "PAUM (Baseline)": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
+        "JotlasNet (Baseline)": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
         "PI_KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
@@ -99,8 +104,8 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
 
     results = {
         "FBP (Baseline)": {"psnr": [], "ssim": [], "rmse": []},
-        "PAUM": {"psnr": [], "ssim": [], "rmse": []},
-        "JotlasNet": {"psnr": [], "ssim": [], "rmse": []},
+        "PAUM (Baseline)": {"psnr": [], "ssim": [], "rmse": []},
+        "JotlasNet (Baseline)": {"psnr": [], "ssim": [], "rmse": []},
         "PI_KINN (Ours)": {"psnr": [], "ssim": [], "rmse": []}
     }
     
@@ -118,27 +123,25 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
             results["FBP (Baseline)"]["ssim"].append(s)
             results["FBP (Baseline)"]["rmse"].append(r)
             
-            # 2. Deep Learning Models with TTRR
+            # 2. Deep Learning Models
             for name, model in models.items():
-                # Apply Test-Time Residual Relaxation
-                pred = apply_ttrr(model, sinogram, fbp_pred, gamma=0.05)
-                
+                pred = model(sinogram)
                 p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask)
                 results[name]["psnr"].append(p)
                 results[name]["ssim"].append(s)
                 results[name]["rmse"].append(r)
 
     print(f"\n{'='*65}")
-    print(f"{'Method':<20} | {'PSNR (dB) ↑':<12} | {'SSIM ↑':<10} | {'RMSE (HU) ↓':<12}")
+    print(f"{'Method':<22} | {'PSNR (dB) ↑':<12} | {'SSIM ↑':<10} | {'RMSE (HU) ↓':<12}")
     print(f"{'-'*65}")
     for name, metrics in results.items():
         avg_psnr = np.mean(metrics['psnr'])
         avg_ssim = np.mean(metrics['ssim'])
         avg_rmse = np.mean(metrics['rmse'])
         if "Ours" in name:
-            print(f"\033[1m{name:<20} | {avg_psnr:<12.2f} | {avg_ssim:<10.4f} | {avg_rmse:<12.1f}\033[0m")
+            print(f"\033[1m{name:<22} | {avg_psnr:<12.2f} | {avg_ssim:<10.4f} | {avg_rmse:<12.1f}\033[0m")
         else:
-            print(f"{name:<20} | {avg_psnr:<12.2f} | {avg_ssim:<10.4f} | {avg_rmse:<12.1f}")
+            print(f"{name:<22} | {avg_psnr:<12.2f} | {avg_ssim:<10.4f} | {avg_rmse:<12.1f}")
     print(f"{'='*65}\n")
 
 if __name__ == "__main__":

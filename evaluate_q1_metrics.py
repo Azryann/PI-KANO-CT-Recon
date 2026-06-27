@@ -85,7 +85,7 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
     models = {
         "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
         "JotlasNet": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
-        "PI-KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
+        "PI_KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
     for name, model in models.items():
@@ -101,7 +101,7 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
         "FBP (Baseline)": {"psnr": [], "ssim": [], "rmse": []},
         "PAUM": {"psnr": [], "ssim": [], "rmse": []},
         "JotlasNet": {"psnr": [], "ssim": [], "rmse": []},
-        "PI-KINN (Ours)": {"psnr": [], "ssim": [], "rmse": []}
+        "PI_KINN (Ours)": {"psnr": [], "ssim": [], "rmse": []}
     }
     
     with torch.no_grad():

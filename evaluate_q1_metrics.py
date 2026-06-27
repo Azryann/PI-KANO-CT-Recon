@@ -16,7 +16,8 @@ def create_circular_mask(h, w):
     Y, X = np.ogrid[:h, :w]
     dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
     mask = dist_from_center <= radius
-    return torch.tensor(mask, dtype=torch.float32)
+    # FIX: Add Batch and Channel dimensions to match the image tensors [1, 1, H, W]
+    return torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
 def calibrate_baseline(pred, gt, mask):
     """ Only used for the untrained FBP baseline to find the global scale. """

@@ -58,7 +58,7 @@ def generate_convergence_curves(data_path, device='cuda'):
     # Extract 20 slices into memory so we evaluate all models on the EXACT same data
     eval_data = []
     for i, (sino, gt) in enumerate(dataloader):
-        if i >= num_test_slices: break
+        if i >= num_eval_slices: break
         eval_data.append((sino.to(device) / phys_scale, gt.to(device) / phys_scale))
         
     fov_mask = create_circular_mask(img_size, img_size, device)

@@ -66,10 +66,10 @@ def generate_convergence_curves(data_path, device='cuda'):
     models = {
         "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
         "JotlasNet": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
-        "PI-KINN": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
+        "PI_KINN": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
-    history = {"PAUM": [], "JotlasNet": [], "PI-KINN": []}
+    history = {"PAUM": [], "JotlasNet": [], "PI_KINN": []}
     epochs = [1, 2, 3, 4, 5]
     
     with torch.no_grad():
@@ -98,8 +98,8 @@ def generate_convergence_curves(data_path, device='cuda'):
     plt.style.use('seaborn-v0_8-whitegrid')
     plt.figure(figsize=(8, 5))
     
-    colors = {"PAUM": "#1f77b4", "JotlasNet": "#ff7f0e", "PI-KINN": "#d62728"}
-    markers = {"PAUM": "s", "JotlasNet": "^", "PI-KINN": "o"}
+    colors = {"PAUM": "#1f77b4", "JotlasNet": "#ff7f0e", "PI_KINN": "#d62728"}
+    markers = {"PAUM": "s", "JotlasNet": "^", "PI_KINN": "o"}
     
     for name in models.keys():
         valid_eps = [e for e, p in zip(epochs, history[name]) if p is not None]

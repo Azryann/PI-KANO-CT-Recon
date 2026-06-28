@@ -3,7 +3,7 @@ import glob
 import torch
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
-
+import torch.nn.functional as F  # <--- ADD THIS LINE
 # Import our custom modules
 from dataloaders import get_ct_dataloader
 from pi_kinn import PI_KINN

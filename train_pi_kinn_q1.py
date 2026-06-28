@@ -23,23 +23,31 @@ def apply_clinical_window(hu_tensor):
     return (clipped + 1000.0) / 1400.0
 
 def compute_comprehensive_metrics(pred_mu, gt_mu):
-    p_mu_np = pred_mu.detach().cpu().squeeze().numpy()
-    g_mu_np = gt_mu.detach().cpu().squeeze().numpy()
+    # Keep the batch and channel dimensions intact: (B, 1, H, W)
+    p_mu_np = pred_mu.detach().cpu().numpy()
+    g_mu_np = gt_mu.detach().cpu().numpy()
     
-    # Fixed Dataset-Wide Dynamic Range for mu-space
+    pred_hu_norm = apply_clinical_window(mu_to_hu(pred_mu)).detach().cpu().numpy()
+    gt_hu_norm = apply_clinical_window(mu_to_hu(gt_mu)).detach().cpu().numpy()
+    
     FIXED_MU_RANGE = 0.04 
-    mse_mu = np.mean((p_mu_np - g_mu_np)**2)
-    psnr_mu = 10 * np.log10((FIXED_MU_RANGE**2) / (mse_mu + 1e-8))
+    psnr_mu_list, psnr_hu_list, ssim_list = [], [], []
     
-    # Windowed HU-space
-    pred_hu_norm = apply_clinical_window(mu_to_hu(pred_mu)).detach().cpu().squeeze().numpy()
-    gt_hu_norm = apply_clinical_window(mu_to_hu(gt_mu)).detach().cpu().squeeze().numpy()
-    
-    mse_hu = np.mean((pred_hu_norm - gt_hu_norm)**2)
-    psnr_hu = 10 * np.log10(1.0 / (mse_hu + 1e-8))
-    ssim_val = ssim(pred_hu_norm, gt_hu_norm, data_range=1.0)
-    
-    return psnr_mu, psnr_hu, ssim_val
+    # Loop over the batch dimension
+    for i in range(p_mu_np.shape[0]):
+        p_m, g_m = p_mu_np[i, 0], g_mu_np[i, 0]
+        p_h, g_h = pred_hu_norm[i, 0], gt_hu_norm[i, 0]
+        
+        # 1. mu-space PSNR
+        mse_mu = np.mean((p_m - g_m)**2)
+        psnr_mu_list.append(10 * np.log10((FIXED_MU_RANGE**2) / (mse_mu + 1e-8)))
+        
+        # 2. Windowed HU-space PSNR & SSIM
+        mse_hu = np.mean((p_h - g_h)**2)
+        psnr_hu_list.append(10 * np.log10(1.0 / (mse_hu + 1e-8)))
+        ssim_list.append(ssim(p_h, g_h, data_range=1.0))
+        
+    return np.mean(psnr_mu_list), np.mean(psnr_hu_list), np.mean(ssim_list)
 
 # ==========================================
 # Q1 TRAINING PIPELINE (Clean & Ablated)

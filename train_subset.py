@@ -3,7 +3,6 @@ import time
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import Subset
 
 from dataloaders import get_ct_dataloader
 from pi_kinn import PI_KINN, KirchhoffPhysicsConstraint
@@ -14,17 +13,17 @@ def train_60_epochs_subset(data_path, device='cuda'):
     img_size, angles, detectors = 362, 1000, 513
     batch_size = 2
     
-    # Load full dataset, then subset to 20% (7,164 slices)
+    # Load full dataset
     full_dataloader = get_ct_dataloader('lodopab', data_path, batch_size=batch_size)
-    full_dataset = full_dataloader.dataset
     
-    # 20% Subset (Assuming sequential loading for IterableDataset, or Subset for Map-style)
-    # For IterableDataset, we will manually break the epoch at 3,582 steps.
+    # 20% Subset: We manually break the epoch at 3,582 steps.
     steps_per_epoch = 3582 
     epochs = 60
     
     model = PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
-    kirchhoff_op = KirchhoffPhysicsConstraint(img_size, angles, detectors, device=device)
+    
+    # FIX: Removed 'detectors' argument. Kirchhoff integral only needs img_size and angles.
+    kirchhoff_op = KirchhoffPhysicsConstraint(img_size, angles, device=device)
     
     optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
@@ -55,9 +54,7 @@ def train_60_epochs_subset(data_path, device='cuda'):
             l_data = F.mse_loss(reconstructions, ground_truths)
             
             # L_kirchhoff (Physics Constraint)
-            # We evaluate the Kirchhoff integral on the network output and compare to measured sinogram
             k_out = kirchhoff_op(reconstructions)
-            # (Simplified projection matching for the constraint)
             l_physics = F.mse_loss(k_out, sinograms.mean(dim=-1)) 
             
             loss = (lambda_data * l_data) + (lambda_physics * l_physics)

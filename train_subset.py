@@ -73,7 +73,7 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
     if checkpoints:
         latest_ckpt = max(checkpoints, key=os.path.getctime)
         print(f"Found checkpoint: {latest_ckpt}. Resuming training...")
-        checkpoint = torch.load(latest_ckpt, map_location=device)
+        checkpoint = torch.load(latest_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state'])
         optimizer.load_state_dict(checkpoint['optimizer_state'])
         scheduler.load_state_dict(checkpoint['scheduler_state'])

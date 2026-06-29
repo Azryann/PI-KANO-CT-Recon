@@ -16,7 +16,10 @@ class KirchhoffPhysicsConstraint(nn.Module):
         
         # Pre-compute the Kirchhoff Kernel K [Angles, H, W] offline
         print("Pre-computing Vectorized Kirchhoff Kernel...")
-        theta = torch.linspace(0, np.pi, num_angles, endpoint=False, device=device)
+        
+        # FIX: PyTorch linspace doesn't support endpoint=False. Manually calculate end_angle.
+        end_angle = np.pi * (num_angles - 1) / num_angles
+        theta = torch.linspace(0, end_angle, num_angles, device=device)
         
         y_grid, x_grid = torch.meshgrid(
             torch.linspace(-1.0, 1.0, img_size, device=device),
@@ -44,6 +47,7 @@ class KirchhoffPhysicsConstraint(nn.Module):
         kirchhoff_residual = torch.einsum('ahw,bchw->bca', self.K_kernel, f_hat)
         return kirchhoff_residual
 
+# ... (Keep your PI_KINN class exactly as it is below this) ...
 
 class PI_KINN(nn.Module):
     def __init__(self, img_size=362, num_angles=1000, num_detectors=513, num_cascades=3, device='cuda'):

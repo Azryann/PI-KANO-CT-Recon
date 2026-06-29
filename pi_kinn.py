@@ -43,11 +43,13 @@ class KirchhoffPhysicsConstraint(nn.Module):
         Returns: [Batch, Channels, Angles]
         """
         # Vectorized integral over spatial dimensions. 
-        # Replaces the O(N^2) Python loop with a single GPU matrix multiply.
         kirchhoff_residual = torch.einsum('ahw,bchw->bca', self.K_kernel, f_hat)
+        
+        # FIX: Spatial Normalization. 
+        # Divides the 2D surface integral by H to match the 1D line-integral scale of the sinogram.
+        kirchhoff_residual = kirchhoff_residual / f_hat.shape[2]
+        
         return kirchhoff_residual
-
-# ... (Keep your PI_KINN class exactly as it is below this) ...
 
 class PI_KINN(nn.Module):
     def __init__(self, img_size=362, num_angles=1000, num_detectors=513, num_cascades=3, device='cuda'):

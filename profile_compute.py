@@ -12,10 +12,18 @@ def count_parameters(model):
 def measure_inference_time(model, dummy_input, device, num_runs=100):
     model.eval()
     
-    # 1. GPU Warm-up (Crucial for accurate timing)
+    # Q1 FIX: JIT Compile the model to fuse the custom Kirchhoff ODE kernels
+    # This ensures a fair hardware comparison against highly-optimized standard CNNs
+    try:
+        compiled_model = torch.compile(model, mode="reduce-overhead")
+    except Exception as e:
+        print("Torch compile failed, falling back to eager mode.")
+        compiled_model = model
+    
+    # 1. GPU Warm-up (Crucial for accurate timing and JIT compilation)
     with torch.no_grad():
         for _ in range(20):
-            _ = model(dummy_input)
+            _ = compiled_model(dummy_input)
             
     torch.cuda.synchronize()
     
@@ -26,7 +34,7 @@ def measure_inference_time(model, dummy_input, device, num_runs=100):
     with torch.no_grad():
         for i in range(num_runs):
             start_events[i].record()
-            _ = model(dummy_input)
+            _ = compiled_model(dummy_input)
             end_events[i].record()
             
     torch.cuda.synchronize()
@@ -39,7 +47,7 @@ def measure_inference_time(model, dummy_input, device, num_runs=100):
     return avg_time_ms, std_time_ms
 
 def run_profiling():
-    print(f"\n{'='*65}\nStarting Q1 Computational Profiling (Edge-AI Benchmarks)\n{'='*65}")
+    print(f"\n{'='*65}\nStarting Q1 Computational Profiling (JIT Compiled)\n{'='*65}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     img_size, angles, detectors = 362, 1000, 513
@@ -64,8 +72,6 @@ def run_profiling():
             print(f"{name:<25} | {params:<12,} | {avg_ms:>6.1f} ± {std_ms:>4.1f} ms")
             
     print(f"{'='*65}\n")
-    print("Note: PI-KINN utilizes O(N^2 log N) Fourier physics.")
-    print("      Baselines utilize O(N^3) spatial physics approximations.")
 
 if __name__ == "__main__":
     run_profiling()

@@ -67,7 +67,7 @@ def generate_visuals(data_path, device='cuda'):
     models = {
         "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
         "JotlasNet": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
-        "PI-KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
+        "PI_KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
     # Load Weights
@@ -111,9 +111,9 @@ def generate_visuals(data_path, device='cuda'):
     fig, axes = plt.subplots(3, 5, figsize=(20, 12))
     plt.subplots_adjust(wspace=0.05, hspace=0.05)
     
-    titles = ["Ground Truth", "FBP", "PAUM", "JotlasNet", "PI-KINN (Ours)"]
-    images = [gt_img, results["FBP"]["img"], results["PAUM"]["img"], results["JotlasNet"]["img"], results["PI-KINN (Ours)"]["img"]]
-    errors = [np.zeros_like(gt_img), results["FBP"]["err"], results["PAUM"]["err"], results["JotlasNet"]["err"], results["PI-KINN (Ours)"]["err"]]
+    titles = ["Ground Truth", "FBP", "PAUM", "JotlasNet", "PI_KINN (Ours)"]
+    images = [gt_img, results["FBP"]["img"], results["PAUM"]["img"], results["JotlasNet"]["img"], results["PI_KINN (Ours)"]["img"]]
+    errors = [np.zeros_like(gt_img), results["FBP"]["err"], results["PAUM"]["err"], results["JotlasNet"]["err"], results["PI_KINN (Ours)"]["err"]]
     
     # ROI Coordinates (Adjust these if the slice doesn't capture a good feature)
     x1, y1, box_size = 180, 120, 60 

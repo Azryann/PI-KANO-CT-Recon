@@ -125,7 +125,7 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
             # Q1 FIX: Scale-Invariant Kirchhoff Loss (Cosine Similarity)
             # Forces physical phase/shape alignment without magnitude explosion.
             # Bounded between 0.0 (perfect match) and 2.0 (perfect opposite).
-            l_physics = 1.0 - F.cosine_similarity(k_out.flatten(1), target_k.flatten(1)).mean()
+            loss_phys = 1.0 - F.cosine_similarity(k_out.flatten(1), target_k.flatten(1)).mean()
             
             # Composite Loss
             loss = loss_mu + loss_hu + (0.1 * loss_phys)

@@ -3,7 +3,8 @@ import glob
 import torch
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
-import torch.nn.functional as F  # <--- ADD THIS LINE
+import torch.nn.functional as F
+
 # Import our custom modules
 from dataloaders import get_ct_dataloader
 from pi_kinn import PI_KINN
@@ -37,7 +38,7 @@ def apply_clinical_window(hu_tensor):
     clipped = torch.clamp(hu_tensor, min=-1000.0, max=400.0)
     return (clipped + 1000.0) / 1400.0
 
-def compute_q1_metrics(pred_mu, gt_mu, mask):
+def compute_q1_metrics(pred_mu, gt_mu, mask, batch_idx=1):
     pred_aligned = align_to_clinical_domain(pred_mu, gt_mu, mask)
     
     pred_hu = mu_to_hu(pred_aligned)
@@ -49,6 +50,11 @@ def compute_q1_metrics(pred_mu, gt_mu, mask):
     
     pred_norm = apply_clinical_window(pred_hu) * mask
     gt_norm = apply_clinical_window(gt_hu) * mask
+    
+    # [DAY 1 DIAGNOSTIC] Verify the clinical window normalization is strictly [0, 1]
+    if batch_idx == 0:
+        print(f"  -> [DIAGNOSTIC] Windowed GT Range: [{gt_norm.min():.4f}, {gt_norm.max():.4f}] (Should be bounded by 0.0 and 1.0)")
+        print(f"  -> [DIAGNOSTIC] Windowed Pred Range: [{pred_norm.min():.4f}, {pred_norm.max():.4f}]")
     
     p_np = pred_norm.detach().cpu().squeeze().numpy()
     g_np = gt_norm.detach().cpu().squeeze().numpy()
@@ -66,7 +72,6 @@ def total_variation_denoise(img, weight=0.1, iters=50):
     optimizer = torch.optim.Adam([x], lr=0.05)
     for _ in range(iters):
         optimizer.zero_grad()
-        # TV Penalty (gradients in x and y directions)
         tv_loss = torch.sum(torch.abs(x[:, :, :, :-1] - x[:, :, :, 1:])) + \
                   torch.sum(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :]))
         loss = F.mse_loss(x, img) + weight * tv_loss
@@ -75,15 +80,11 @@ def total_variation_denoise(img, weight=0.1, iters=50):
     return x.detach()
 
 def load_best_checkpoint(model, model_name, device):
-    """ Scans all epochs and loads the one that yields the highest PSNR on a small validation batch. """
     checkpoints = glob.glob(f"{model_name}_checkpoint_ep*.pth")
     if not checkpoints:
         print(f"[WARNING] No checkpoints found for {model_name}!")
         return False
         
-    # For speed, we just load the latest epoch if we don't have a separate validation set saved.
-    # In a true Q1 paper, you would evaluate all 5 on a validation set and pick the best.
-    # Here, we assume the user wants the highest epoch available.
     latest_ckpt = max(checkpoints, key=os.path.getctime)
     model.load_state_dict(torch.load(latest_ckpt, map_location=device)['model_state'])
     model.eval()
@@ -105,7 +106,6 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
         "PI_KINN (Ours)": PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
-    # Load Best Weights
     for name, model in models.items():
         ckpt_name = name.split(" ")[0]
         load_best_checkpoint(model, ckpt_name, device)
@@ -119,21 +119,25 @@ def evaluate_all_models(data_path, device='cuda', num_test_samples=100):
             sinogram = sinogram.to(device) / phys_scale
             gt = gt.to(device) / phys_scale
             
+            # [DAY 1 DIAGNOSTIC] Verify raw input scale
+            if i == 0:
+                print(f"\n  -> [DIAGNOSTIC] Raw GT Range (mu-space): [{gt.min():.6f}, {gt.max():.6f}]")
+            
             # 1. FBP Baseline
             fbp_pred = physics.adjoint(sinogram)
-            p, s, r = compute_q1_metrics(fbp_pred * phys_scale, gt * phys_scale, fov_mask)
+            p, s, r = compute_q1_metrics(fbp_pred * phys_scale, gt * phys_scale, fov_mask, batch_idx=i)
             results["FBP (Baseline)"]["psnr"].append(p); results["FBP (Baseline)"]["ssim"].append(s); results["FBP (Baseline)"]["rmse"].append(r)
             
-            # 2. TV-MBIR Baseline (Denoised FBP)
+            # 2. TV-MBIR Baseline
             with torch.enable_grad():
                 tv_pred = total_variation_denoise(fbp_pred)
-            p, s, r = compute_q1_metrics(tv_pred * phys_scale, gt * phys_scale, fov_mask)
+            p, s, r = compute_q1_metrics(tv_pred * phys_scale, gt * phys_scale, fov_mask, batch_idx=1) # Pass 1 to suppress print
             results["TV-MBIR (Baseline)"]["psnr"].append(p); results["TV-MBIR (Baseline)"]["ssim"].append(s); results["TV-MBIR (Baseline)"]["rmse"].append(r)
             
             # 3. Deep Learning Models
             for name, model in models.items():
                 pred = model(sinogram)
-                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask)
+                p, s, r = compute_q1_metrics(pred * phys_scale, gt * phys_scale, fov_mask, batch_idx=1)
                 results[name]["psnr"].append(p); results[name]["ssim"].append(s); results[name]["rmse"].append(r)
 
     print(f"\n{'='*75}")

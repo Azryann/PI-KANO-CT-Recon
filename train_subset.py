@@ -66,12 +66,21 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
     # --- RESUME LOGIC ---
+    # --- RESUME LOGIC ---
     start_epoch = 0
     best_val_hu_psnr = -float('inf')
     checkpoints = glob.glob("PI_KINN_subset_ep*.pth")
     
     if checkpoints:
-        latest_ckpt = max(checkpoints, key=os.path.getctime)
+        # FIX: Extract the actual epoch number from the filename to find the latest
+        def get_epoch_num(fpath):
+            try:
+                return int(os.path.basename(fpath).split('_ep')[1].split('.pth')[0])
+            except ValueError:
+                return -1
+                
+        latest_ckpt = max(checkpoints, key=get_epoch_num)
+        
         print(f"Found checkpoint: {latest_ckpt}. Resuming training...")
         checkpoint = torch.load(latest_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state'])

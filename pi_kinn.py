@@ -71,22 +71,23 @@ class PI_KINN(nn.Module):
         tau = torch.clamp(self.step_size, min=1e-4, max=2.0)
         
         x_k = self.physics.adjoint(y) * tau
-        # FIX: Clamp physical initialization
         x_k = torch.clamp(x_k, min=0.0) 
         
+        # Initialize both Voltage and Momentum states
         v_state = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
+        v_momentum = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
         
         for i in range(self.num_cascades):
             Ax = self.physics.forward(x_k)
             residual = Ax - y
             physics_grad = self.physics.adjoint(residual) * tau
             
-            # Q1 FIX: Added GELU to the lifting layer
             current_I = F.gelu(self.lifting(torch.cat([x_k, physics_grad], dim=1)))
             
-            v_state = self.kinn_cell(current_I, v_state)
-            update = self.projection(v_state)
+            # Pass both states through the RLC circuit
+            v_state, v_momentum = self.kinn_cell(current_I, v_state, v_momentum)
             
+            update = self.projection(v_state)
             x_k = torch.clamp(x_k - update, min=0.0)
             
         return x_k

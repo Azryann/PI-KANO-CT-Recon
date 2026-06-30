@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from kinn import KINN_Block
 from physics import RadonPhysics
-
+import torch.nn.functional as F  # <--- ADD THIS LINE
 class KirchhoffPhysicsConstraint(nn.Module):
     """
     Vectorized Kirchhoff Diffraction Integral.
@@ -81,11 +81,12 @@ class PI_KINN(nn.Module):
             residual = Ax - y
             physics_grad = self.physics.adjoint(residual) * tau
             
-            current_I = self.lifting(torch.cat([x_k, physics_grad], dim=1))
+            # Q1 FIX: Added GELU to the lifting layer
+            current_I = F.gelu(self.lifting(torch.cat([x_k, physics_grad], dim=1)))
+            
             v_state = self.kinn_cell(current_I, v_state)
             update = self.projection(v_state)
             
-            # FIX: Clamp INSIDE the loop so physics never sees negative mass
             x_k = torch.clamp(x_k - update, min=0.0)
             
         return x_k

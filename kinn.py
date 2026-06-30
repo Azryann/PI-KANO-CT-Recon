@@ -21,24 +21,14 @@ class KirchhoffNeuralCell2d(nn.Module):
         nn.init.kaiming_normal_(self.current_extractor.weight, mode='fan_out', nonlinearity='relu')
 
     def forward(self, x, v_prev):
-        """
-        x: Input features (acts as the driving signal)
-        v_prev: Previous voltage state of the cell
-        """
-        # 1. Enforce strict positivity for physical parameters (prevent division by zero)
         C_safe = F.softplus(self.C) + 1e-6
         G_safe = F.softplus(self.G) + 1e-6
         
-        # 2. Extract driving current I(t) from input
-        I_t = self.current_extractor(x)
+        # Q1 FIX: Added GELU (The "Diode"). Makes the circuit non-linear!
+        I_t = F.gelu(self.current_extractor(x))
         
-        # 3. ZOH Discretization of Kirchhoff's Current Law
-        # decay = exp(-G/C * dt), assuming dt = 1.0
         decay = torch.exp(-G_safe / C_safe)
-        
-        # 4. State Update: V(t+1) = V(t)*decay + (I(t)/G)*(1 - decay)
         accumulation = I_t * (1.0 - decay) / G_safe
-        
         v_next = (v_prev * decay) + accumulation
         return v_next
 

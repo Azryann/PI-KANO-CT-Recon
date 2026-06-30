@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
-
+from pi_kinn import KirchhoffPhysicsConstraint
 # Import our custom modules
 from dataloaders import get_ct_dataloader
 from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
@@ -67,7 +67,8 @@ def train_baseline_subset(model_name, data_path, val_path=None, device='cuda'):
         model = JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device)
     else:
         raise ValueError("Invalid model name.")
-        
+    
+    kirchhoff_op = KirchhoffPhysicsConstraint(img_size, angles, device=device)
     optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
@@ -128,7 +129,10 @@ def train_baseline_subset(model_name, data_path, val_path=None, device='cuda'):
             loss_hu = F.l1_loss(pred_hu_scaled, gt_hu_scaled)
             
             # Loss 3: Standard Physics Fidelity (Baselines use standard Radon physics)
-            loss_phys = F.mse_loss(model.physics(reconstructions), sinograms) 
+            # Loss 3: Scale-Invariant Physics Constraint (Identical to PI-KINN)
+            k_out = kirchhoff_op(reconstructions)
+            target_k = sinograms.mean(dim=-1)
+            loss_phys = 1.0 - F.cosine_similarity(k_out.flatten(1), target_k.flatten(1)).mean() 
             
             # Composite Loss (Identical to PI-KINN)
             loss = loss_mu + loss_hu + (0.1 * loss_phys)

@@ -106,3 +106,7 @@ Drafting the Narrative (Wave vs. Ray Tracing).
 Line-by-Line Review.
 
 Under a constrained computational budget of 90,000 gradient steps, PI-KINN establishes a strictly superior learning trajectory, maintaining a +2.5 dB advantage over contemporary baselines. While absolute asymptotic convergence may require extended training, PI-KINN's rapid early-stage alignment demonstrates the sample efficiency of the Kirchhoff ODE prior.
+
+
+
+While the LoDoPaB-CT dataset provides over 35,000 training slices, acquiring datasets of this magnitude is often prohibitive in real-world clinical environments. To rigorously evaluate the sample efficiency and inductive bias of the proposed architecture, all models were trained on a strictly constrained 20% stratified subset (7,164 slices). Stratification was performed by patient ID to prevent anatomical data leakage. By restricting the training data, we explicitly test the hypothesis that the continuous-time physical priors embedded in the Kirchhoff ODE cell can substitute for massive data volumes. All models (PI-KINN, PAUM, and JotlasNet) were trained for 60 epochs on this identical subset to ensure a perfectly unbiased architectural comparison. Evaluation was performed on the official, full-scale held-out test set

@@ -75,7 +75,6 @@ class PI_KINN(nn.Module):
         
         # Initialize both Voltage and Momentum states
         v_state = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
-        v_momentum = torch.zeros(B, self.hidden_channels, H, W, device=self.device)
         
         for i in range(self.num_cascades):
             Ax = self.physics.forward(x_k)
@@ -85,7 +84,7 @@ class PI_KINN(nn.Module):
             current_I = F.gelu(self.lifting(torch.cat([x_k, physics_grad], dim=1)))
             
             # Pass both states through the RLC circuit
-            v_state, v_momentum = self.kinn_cell(current_I, v_state, v_momentum)
+            v_state = self.kinn_cell(current_I, v_state)
             
             update = self.projection(v_state)
             x_k = torch.clamp(x_k - update, min=0.0)

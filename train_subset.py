@@ -130,8 +130,10 @@ def train_fda_net(data_path, val_path=None, device='cuda'):
             gt_hu_scaled = mu_to_hu(ground_truths * phys_scale) / 1000.0
             loss_hu = F.l1_loss(pred_hu_scaled, gt_hu_scaled)
             
-            # Loss 3: Physics Fidelity (Data Consistency)
-            loss_phys = F.mse_loss(model.physics(reconstructions), sinograms) 
+            # Loss 3: Physics Fidelity (Scale-Invariant Cosine Similarity)
+            # Bounded between 0.0 and 2.0. Prevents line-integral magnitude explosion.
+            pred_sino = model.physics(reconstructions)
+            loss_phys = 1.0 - F.cosine_similarity(pred_sino.flatten(1), sinograms.flatten(1)).mean()
             
             # Composite Loss
             loss = loss_mu + loss_hu + (0.1 * loss_phys)

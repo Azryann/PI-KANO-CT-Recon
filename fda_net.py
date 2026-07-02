@@ -3,6 +3,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from physics import RadonPhysics
 
+class DepthwiseSeparableConv(nn.Module):
+    """ 
+    Edge-AI Optimization: Reduces parameters by ~90% compared to standard Conv2d.
+    Crucial for maintaining the 'Lightweight Edge Deployment' narrative.
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
+        super().__init__()
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, padding=padding, groups=in_channels)
+        self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+        return out
+
 class FrequencyAttention(nn.Module):
     """
     Novel Algorithmic Contribution: Frequency-Domain Attention.
@@ -10,59 +25,50 @@ class FrequencyAttention(nn.Module):
     """
     def __init__(self, channels):
         super().__init__()
-        # Lightweight MLP to learn frequency weights
+        # Ultra-lightweight MLP (bottleneck ratio 4)
         self.mlp = nn.Sequential(
-            nn.Linear(channels, channels // 2),
+            nn.Linear(channels, channels // 4),
             nn.ReLU(inplace=True),
-            nn.Linear(channels // 2, channels),
-            nn.Sigmoid() # Outputs attention weights between 0 and 1
+            nn.Linear(channels // 4, channels),
+            nn.Sigmoid() 
         )
 
     def forward(self, x):
         B, C, H, W = x.shape
-        
-        # 1. Transform to Frequency Domain
         x_freq = torch.fft.rfft2(x)
-        
-        # 2. Extract Magnitude (Amplitude of frequencies)
         mag = torch.abs(x_freq)
         
-        # 3. Global Average Pooling over spatial frequencies to get channel-wise frequency profile
-        freq_profile = mag.mean(dim=(2, 3)) # Shape: (B, C)
-        
-        # 4. Learn Attention Weights
+        freq_profile = mag.mean(dim=(2, 3)) 
         attn_weights = self.mlp(freq_profile).view(B, C, 1, 1)
         
-        # 5. Apply Attention in Frequency Domain
         x_freq_attended = x_freq * attn_weights
-        
-        # 6. Return to Spatial Domain
         return torch.fft.irfft2(x_freq_attended, s=(H, W))
 
 class FDABlock(nn.Module):
-    """ Dual-Domain Unrolled Cascade Block """
+    """ Dual-Domain Unrolled Cascade Block (MobileNet-Optimized) """
     def __init__(self, in_channels=2, hidden_channels=32):
         super().__init__()
-        self.spatial_conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, hidden_channels, 3, padding=1),
-            nn.InstanceNorm2d(hidden_channels),
-            nn.ReLU(inplace=True)
-        )
         
-        # The Novel Frequency Attention Module
+        # First layer must be standard to expand from 2 channels to 32
+        self.expand_conv = nn.Conv2d(in_channels, hidden_channels, 3, padding=1)
+        self.norm1 = nn.InstanceNorm2d(hidden_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        
         self.freq_attn = FrequencyAttention(hidden_channels)
         
-        self.spatial_conv2 = nn.Sequential(
-            nn.Conv2d(hidden_channels, hidden_channels, 3, padding=1),
-            nn.InstanceNorm2d(hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels, 1, 3, padding=1)
-        )
+        # Heavy internal processing replaced with Depthwise Separable Convs
+        self.dw_conv = DepthwiseSeparableConv(hidden_channels, hidden_channels, 3, padding=1)
+        self.norm2 = nn.InstanceNorm2d(hidden_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+        
+        # Final projection back to 1 channel
+        self.project_conv = nn.Conv2d(hidden_channels, 1, 3, padding=1)
 
     def forward(self, x):
-        feat = self.spatial_conv1(x)
-        feat = feat + self.freq_attn(feat) # Residual Frequency Attention
-        return self.spatial_conv2(feat)
+        feat = self.relu1(self.norm1(self.expand_conv(x)))
+        feat = feat + self.freq_attn(feat) 
+        feat = self.relu2(self.norm2(self.dw_conv(feat)))
+        return self.project_conv(feat)
 
 class FDA_Net(nn.Module):
     """
@@ -73,7 +79,6 @@ class FDA_Net(nn.Module):
         self.num_cascades = num_cascades
         self.physics = RadonPhysics(img_size, num_angles, num_detectors, device=device)
         
-        # Power Iteration for strict proximal bounds
         self.tau_max = 2.0 / self._power_iteration(img_size, device)
         self.tau = nn.Parameter(torch.tensor(self.tau_max * 0.1))
         

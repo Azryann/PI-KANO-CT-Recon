@@ -48,15 +48,10 @@ def compute_comprehensive_metrics(pred_mu, gt_mu):
     return np.mean(psnr_mu_list), np.mean(psnr_hu_list), np.mean(ssim_list)
 
 def apply_zero_init(model):
-    """ 
-    Q1 Trick: Initializes the final projection layer of each cascade to 0.0.
-    This guarantees the network starts exactly at the FBP baseline (~26 dB) 
-    and only learns to improve it, preventing the initial performance collapse.
-    """
     for block in model.blocks:
-        # The last layer in spatial_conv2 is the projection back to 1 channel
-        nn.init.zeros_(block.spatial_conv2[-1].weight)
-        nn.init.zeros_(block.spatial_conv2[-1].bias)
+        # Initialize the final projection layer to 0.0
+        nn.init.zeros_(block.project_conv.weight)
+        nn.init.zeros_(block.project_conv.bias)
     print("Applied Zero-Initialization. Model will start at FBP baseline.")
 
 # ==========================================

@@ -2,13 +2,15 @@ import os
 import glob
 import time
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 
+# Import our custom modules
 from dataloaders import get_ct_dataloader
-from pi_kinn import PI_KINN, KirchhoffPhysicsConstraint
+from fda_net import FDA_Net
 
 # ==========================================
 # Q1 CLINICAL MATH & METRICS
@@ -45,11 +47,23 @@ def compute_comprehensive_metrics(pred_mu, gt_mu):
         
     return np.mean(psnr_mu_list), np.mean(psnr_hu_list), np.mean(ssim_list)
 
+def apply_zero_init(model):
+    """ 
+    Q1 Trick: Initializes the final projection layer of each cascade to 0.0.
+    This guarantees the network starts exactly at the FBP baseline (~26 dB) 
+    and only learns to improve it, preventing the initial performance collapse.
+    """
+    for block in model.blocks:
+        # The last layer in spatial_conv2 is the projection back to 1 channel
+        nn.init.zeros_(block.spatial_conv2[-1].weight)
+        nn.init.zeros_(block.spatial_conv2[-1].bias)
+    print("Applied Zero-Initialization. Model will start at FBP baseline.")
+
 # ==========================================
 # Q1 TRAINING PIPELINE (60 Epochs, 20% Subset)
 # ==========================================
-def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
-    print(f"\n{'='*75}\nDAY 2 LAUNCH: 60-Epoch PI-KINN (20% Subset + Q1 Rigor)\n{'='*75}")
+def train_fda_net(data_path, val_path=None, device='cuda'):
+    print(f"\n{'='*75}\nDAY 2 LAUNCH: 60-Epoch FDA-Net (20% Subset + Q1 Rigor)\n{'='*75}")
     
     img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     batch_size = 2
@@ -59,28 +73,23 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
     train_loader = get_ct_dataloader('lodopab', data_path, batch_size=batch_size)
     val_loader = get_ct_dataloader('lodopab', val_path, batch_size=batch_size) if val_path and os.path.exists(val_path) else train_loader
     
-    model = PI_KINN(img_size, angles, detectors, num_cascades=3, device=device).to(device)
-    kirchhoff_op = KirchhoffPhysicsConstraint(img_size, angles, device=device)
+    model = FDA_Net(img_size, angles, detectors, num_cascades=3, device=device).to(device)
+    apply_zero_init(model)
     
     optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
     
     # --- RESUME LOGIC ---
-    # --- RESUME LOGIC ---
     start_epoch = 0
     best_val_hu_psnr = -float('inf')
-    checkpoints = glob.glob("PI_KINN_subset_ep*.pth")
+    checkpoints = glob.glob("FDA_Net_subset_ep*.pth")
     
     if checkpoints:
-        # FIX: Extract the actual epoch number from the filename to find the latest
         def get_epoch_num(fpath):
-            try:
-                return int(os.path.basename(fpath).split('_ep')[1].split('.pth')[0])
-            except ValueError:
-                return -1
+            try: return int(os.path.basename(fpath).split('_ep')[1].split('.pth')[0])
+            except ValueError: return -1
                 
         latest_ckpt = max(checkpoints, key=get_epoch_num)
-        
         print(f"Found checkpoint: {latest_ckpt}. Resuming training...")
         checkpoint = torch.load(latest_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state'])
@@ -126,15 +135,8 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
             gt_hu_scaled = mu_to_hu(ground_truths * phys_scale) / 1000.0
             loss_hu = F.l1_loss(pred_hu_scaled, gt_hu_scaled)
             
-            # Loss 3: Kirchhoff Physics Constraint
-            # L_kirchhoff (Physics Constraint)
-            k_out = kirchhoff_op(reconstructions)
-            target_k = sinograms.mean(dim=-1)
-            
-            # Q1 FIX: Scale-Invariant Kirchhoff Loss (Cosine Similarity)
-            # Forces physical phase/shape alignment without magnitude explosion.
-            # Bounded between 0.0 (perfect match) and 2.0 (perfect opposite).
-            loss_phys = 1.0 - F.cosine_similarity(k_out.flatten(1), target_k.flatten(1)).mean()
+            # Loss 3: Physics Fidelity (Data Consistency)
+            loss_phys = F.mse_loss(model.physics(reconstructions), sinograms) 
             
             # Composite Loss
             loss = loss_mu + loss_hu + (0.1 * loss_phys)
@@ -190,15 +192,13 @@ def train_60_epochs_subset(data_path, val_path=None, device='cuda'):
             'best_val_psnr': best_val_hu_psnr
         }
         
-        # Save current epoch
-        torch.save(ckpt_data, f"PI_KINN_subset_ep{epoch+1}.pth")
+        torch.save(ckpt_data, f"FDA_Net_subset_ep{epoch+1}.pth")
         
-        # Save BEST epoch
         is_best = ""
         if avg_p_hu > best_val_hu_psnr:
             best_val_hu_psnr = avg_p_hu
             ckpt_data['best_val_psnr'] = best_val_hu_psnr
-            torch.save(ckpt_data, "PI_KINN_subset_BEST.pth")
+            torch.save(ckpt_data, "FDA_Net_subset_BEST.pth")
             is_best = "★ NEW BEST"
             
         print(f"\n{'-'*75}")
@@ -213,4 +213,4 @@ if __name__ == "__main__":
     VAL_PATH = "/kaggle/input/datasets/peeeeeg/lodopab/lodopab_full_dose_validation.tfrecord" 
     
     if os.path.exists(TRAIN_PATH):
-        train_60_epochs_subset(TRAIN_PATH, val_path=VAL_PATH, device=device)
+        train_fda_net(TRAIN_PATH, val_path=VAL_PATH, device=device)

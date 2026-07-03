@@ -210,5 +210,5 @@ if __name__ == "__main__":
     
     if os.path.exists(TRAIN_PATH):
         # CHANGE THIS VARIABLE TO 'JotlasNet' TO TRAIN THE TRANSFORMER
-        MODEL_TO_TRAIN = 'PAUM' 
+        MODEL_TO_TRAIN = 'JotlasNet' 
         train_baseline_subset(MODEL_TO_TRAIN, TRAIN_PATH, val_path=VAL_PATH, device=device)

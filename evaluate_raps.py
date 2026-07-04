@@ -44,7 +44,7 @@ def generate_full_raps(data_path, device='cuda'):
         ckpt_name = name.split(" ")[0]
         ckpt_path = f"{ckpt_name}_subset_BEST.pth"
         if os.path.exists(ckpt_path):
-            model.load_state_dict(torch.load(ckpt_path, map_location=device)['model_state'])
+            model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False)['model_state'])
             model.eval()
 
     for i, (sino, gt) in enumerate(dataloader):

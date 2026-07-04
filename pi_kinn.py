@@ -83,6 +83,7 @@ class PI_KINN(nn.Module):
             
             current_I = F.gelu(self.lifting(torch.cat([x_k, physics_grad], dim=1)))
             
+            
             # Pass both states through the RLC circuit
             v_state = self.kinn_cell(current_I, v_state)
             

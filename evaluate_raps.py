@@ -2,6 +2,8 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
 from dataloaders import get_ct_dataloader
 from physics import RadonPhysics
 from fda_net import FDA_Net
@@ -25,9 +27,10 @@ def compute_raps(image_np):
     return np.log10(radialprofile + 1e-8)
 
 def generate_full_raps(data_path, device='cuda'):
-    print("Generating Full Q1 RAPS Plot...")
-    img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
+    print("Generating Q1 RAPS Plot with High-Frequency Inset...")
+    plt.rcParams.update({'font.family': 'serif', 'mathtext.fontset': 'cm'})
     
+    img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     dataloader = get_ct_dataloader('lodopab', data_path, batch_size=1)
     physics = RadonPhysics(img_size, angles, detectors, device=device)
     
@@ -39,20 +42,19 @@ def generate_full_raps(data_path, device='cuda'):
     
     for name, model in models.items():
         ckpt_name = name.split(" ")[0]
-        ckpt_path = f"{ckpt_name}_subset_BEST.pth" # Using the BEST checkpoints
+        ckpt_path = f"{ckpt_name}_subset_BEST.pth"
         if os.path.exists(ckpt_path):
             model.load_state_dict(torch.load(ckpt_path, map_location=device)['model_state'])
             model.eval()
 
     for i, (sino, gt) in enumerate(dataloader):
-        if i == 15: # Use the same good slice we used for visuals
+        if i == 15: 
             sinogram = sino.to(device) / phys_scale
             ground_truth = gt.to(device) / phys_scale
             break
 
     with torch.no_grad():
         fbp_pred = physics.adjoint(sinogram)
-        
         raps_dict = {}
         raps_dict["Ground Truth"] = compute_raps(ground_truth.squeeze().cpu().numpy())
         raps_dict["FBP"] = compute_raps(fbp_pred.squeeze().cpu().numpy())
@@ -61,24 +63,37 @@ def generate_full_raps(data_path, device='cuda'):
             pred = model(sinogram)
             raps_dict[name] = compute_raps(pred.squeeze().cpu().numpy())
 
-    # --- PLOTTING ---
     freqs = np.linspace(0, 0.5, len(raps_dict["Ground Truth"]))
     
-    plt.figure(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    plt.plot(freqs, raps_dict["Ground Truth"], 'k-', linewidth=3, label='Ground Truth')
-    plt.plot(freqs, raps_dict["FBP"], 'gray', linestyle=':', linewidth=2, label='FBP (Baseline)')
-    plt.plot(freqs, raps_dict["PAUM"], '#1f77b4', linestyle='--', linewidth=2, label='PAUM (CNN)')
-    plt.plot(freqs, raps_dict["JotlasNet"], '#2ca02c', linestyle='-.', linewidth=2, label='JotlasNet (ViT)')
-    plt.plot(freqs, raps_dict["FDA-Net (Ours)"], '#d62728', linestyle='-', linewidth=2.5, label='FDA-Net (Ours)')
+    colors = {"Ground Truth": "k", "FBP": "gray", "PAUM": "#1f77b4", "JotlasNet": "#2ca02c", "FDA-Net (Ours)": "#d62728"}
+    styles = {"Ground Truth": "-", "FBP": ":", "PAUM": "--", "JotlasNet": "-.", "FDA-Net (Ours)": "-"}
+    widths = {"Ground Truth": 3, "FBP": 2, "PAUM": 2, "JotlasNet": 2, "FDA-Net (Ours)": 2.5}
     
-    plt.title("Radially Averaged Power Spectrum (RAPS)", fontsize=16, fontweight='bold')
-    plt.xlabel("Spatial Frequency (cycles/pixel)", fontsize=14)
-    plt.ylabel("Log10 Power", fontsize=14)
-    plt.xlim(0, 0.5)
-    plt.ylim(-6, 1)
-    plt.legend(fontsize=12, loc='upper right', frameon=True, shadow=True)
+    for name in raps_dict.keys():
+        ax.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name], label=name)
+    
+    ax.set_title("Radially Averaged Power Spectrum (RAPS)", fontsize=16, fontweight='bold')
+    ax.set_xlabel("Spatial Frequency (cycles/pixel)", fontsize=14)
+    ax.set_ylabel("Log10 Power", fontsize=14)
+    ax.set_xlim(0, 0.5)
+    ax.set_ylim(-6, 1)
+    ax.legend(fontsize=12, loc='lower left', frameon=True, shadow=True)
+    
+    # --- INSET BOX (High-Frequency Zoom) ---
+    axins = ax.inset_axes([0.6, 0.55, 0.35, 0.4]) # [x, y, width, height]
+    for name in raps_dict.keys():
+        axins.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name])
+    
+    # Zoom in on the high-frequency tail
+    axins.set_xlim(0.3, 0.5)
+    axins.set_ylim(-5.5, -2.5)
+    axins.set_xticklabels([])
+    axins.set_yticklabels([])
+    axins.set_title("High-Frequency Detail", fontsize=10)
+    ax.indicate_inset_zoom(axins, edgecolor="black")
     
     plt.tight_layout()
     plt.savefig("fig_raps_full.png", dpi=300)

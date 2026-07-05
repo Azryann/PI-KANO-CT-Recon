@@ -65,9 +65,9 @@ def plot_advanced_pareto():
 
     # Formatting
     ax1.set_title("Edge-AI Pareto Frontier: Computational Workload vs. Clinical Fidelity", fontsize=18, fontweight='bold', pad=20)
-    ax1.set_xlabel("Total Computational Workload (GFLOPs) $\downarrow$", fontsize=14, fontweight='bold')
-    ax1.set_ylabel("PSNR (dB) $\uparrow$ [Solid Markers]", fontsize=14, fontweight='bold')
-    ax2.set_ylabel("SSIM $\uparrow$ [Hollow Markers]", fontsize=14, fontweight='bold')
+    ax1.set_xlabel(r"Total Computational Workload (GFLOPs) $\downarrow$", fontsize=14, fontweight='bold')
+    ax1.set_ylabel(r"PSNR (dB) $\uparrow$ [Solid Markers]", fontsize=14, fontweight='bold')
+    ax2.set_ylabel(r"SSIM $\uparrow$ [Hollow Markers]", fontsize=14, fontweight='bold')
     
     ax1.set_xlim(0.5, 6.0)
     ax1.set_ylim(24.0, 30.0)

@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 from skimage.exposure import match_histograms
 
 # Assuming these are your custom imports
-# from dataloaders import get_ct_dataloader
-# from physics import RadonPhysics
-# from fda_net import FDA_Net
-# from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
+from dataloaders import get_ct_dataloader
+from physics import RadonPhysics
+from fda_net import FDA_Net
+from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
 
 def create_circular_mask(h, w, device):
     center = (int(w/2), int(h/2))

@@ -24,7 +24,6 @@ def apply_clinical_window(hu_tensor):
     return (torch.clamp(hu_tensor, min=-1000.0, max=400.0) + 1000.0) / 1400.0
 
 def process_for_raps(pred_mu, gt_mu, mask, ref_mu=None):
-    """ Applies the exact clinical windowing used in our visual script before FFT. """
     p = pred_mu.detach().cpu().squeeze().numpy()
     g = gt_mu.detach().cpu().squeeze().numpy()
     m = mask.detach().cpu().squeeze().numpy().astype(bool)
@@ -58,7 +57,7 @@ def compute_raps(image_np):
     radialprofile = tbin / nr
     
     radialprofile = radialprofile / radialprofile[0]
-    return np.log10(radialprofile + 1e-12) # 1e-12 prevents log(0) on empty background
+    return np.log10(radialprofile + 1e-12)
 
 def generate_full_raps(data_path, device='cuda'):
     print("Generating Q1 RAPS Plot (Clinically Windowed)...")
@@ -70,20 +69,24 @@ def generate_full_raps(data_path, device='cuda'):
     fov_mask = create_circular_mask(img_size, img_size, device)
     
     models = {
-        "PAUM": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
-        "JotlasNet": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
-        "FDA-Net (Ours)": FDA_Net(img_size, angles, detectors, num_cascades=3, device=device).to(device)
+        "FS-CNN (PAUM)": PAUM_Surrogate(img_size, angles, detectors, num_cascades=3, device=device).to(device),
+        "FS-ViT (JotlasNet)": JotlasNet_Surrogate(img_size, angles, detectors, num_cascades=2, device=device).to(device),
+        "FS-Net (Ours)": FDA_Net(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
+    # Load Weights (Mapping the new names to the old .pth files)
+    ckpt_mapping = {"FS-CNN (PAUM)": "PAUM", "FS-ViT (JotlasNet)": "JotlasNet", "FS-Net (Ours)": "FDA_Net"}
+    
     for name, model in models.items():
-        ckpt_name = name.split(" ")[0]
-        ckpt_path = f"{ckpt_name}_subset_BEST.pth"
+        ckpt_path = f"{ckpt_mapping[name]}_subset_BEST.pth"
         if os.path.exists(ckpt_path):
             model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False)['model_state'])
             model.eval()
+        else:
+            print(f"[WARNING] {ckpt_path} not found!")
 
     for i, (sino, gt) in enumerate(dataloader):
-        if i == 15: 
+        if i == 15: # Use a slice with good lung anatomy
             sinogram = sino.to(device) / phys_scale
             ground_truth = gt.to(device) / phys_scale
             break
@@ -95,7 +98,7 @@ def generate_full_raps(data_path, device='cuda'):
         
         raps_dict = {}
         raps_dict["Ground Truth"] = compute_raps(gt_img)
-        raps_dict["FBP"] = compute_raps(fbp_img)
+        raps_dict["FBP (Analytical)"] = compute_raps(fbp_img)
         
         for name, model in models.items():
             pred = model(sinogram)
@@ -107,9 +110,9 @@ def generate_full_raps(data_path, device='cuda'):
     fig, ax = plt.subplots(figsize=(10, 6))
     plt.style.use('seaborn-v0_8-whitegrid')
     
-    colors = {"Ground Truth": "k", "FBP": "gray", "PAUM": "#1f77b4", "JotlasNet": "#2ca02c", "FDA-Net (Ours)": "#d62728"}
-    styles = {"Ground Truth": "-", "FBP": ":", "PAUM": "--", "JotlasNet": "-.", "FDA-Net (Ours)": "-"}
-    widths = {"Ground Truth": 3, "FBP": 2, "PAUM": 2, "JotlasNet": 2, "FDA-Net (Ours)": 2.5}
+    colors = {"Ground Truth": "k", "FBP (Analytical)": "gray", "FS-CNN (PAUM)": "#1f77b4", "FS-ViT (JotlasNet)": "#2ca02c", "FS-Net (Ours)": "#d62728"}
+    styles = {"Ground Truth": "-", "FBP (Analytical)": ":", "FS-CNN (PAUM)": "--", "FS-ViT (JotlasNet)": "-.", "FS-Net (Ours)": "-"}
+    widths = {"Ground Truth": 3, "FBP (Analytical)": 2, "FS-CNN (PAUM)": 2, "FS-ViT (JotlasNet)": 2, "FS-Net (Ours)": 2.5}
     
     for name in raps_dict.keys():
         ax.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name], label=name)
@@ -119,7 +122,6 @@ def generate_full_raps(data_path, device='cuda'):
     ax.set_ylabel("Log10 Power", fontsize=14)
     ax.set_xlim(0, 0.5)
     
-    # Dynamic Y-Limits based on Ground Truth
     min_power = np.min(raps_dict["Ground Truth"])
     ax.set_ylim(min_power - 1, 1)
     ax.legend(fontsize=12, loc='lower left', frameon=True, shadow=True)
@@ -129,7 +131,6 @@ def generate_full_raps(data_path, device='cuda'):
     for name in raps_dict.keys():
         axins.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name])
     
-    # Zoom in on the high-frequency tail (0.3 to 0.5)
     idx_03 = int(0.3 / 0.5 * len(freqs))
     inset_min = np.min(raps_dict["Ground Truth"][idx_03:]) - 0.5
     inset_max = np.max(raps_dict["Ground Truth"][idx_03:]) + 1.5

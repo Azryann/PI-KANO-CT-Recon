@@ -2,13 +2,13 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from skimage.exposure import match_histograms
 
-from dataloaders import get_ct_dataloader
-from physics import RadonPhysics
-from fda_net import FDA_Net
-from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
+# Assuming these are your custom imports
+# from dataloaders import get_ct_dataloader
+# from physics import RadonPhysics
+# from fda_net import FDA_Net
+# from train_evaluate import PAUM_Surrogate, JotlasNet_Surrogate
 
 def create_circular_mask(h, w, device):
     center = (int(w/2), int(h/2))
@@ -23,16 +23,17 @@ def mu_to_hu(mu_tensor):
 def apply_clinical_window(hu_tensor):
     return (torch.clamp(hu_tensor, min=-1000.0, max=400.0) + 1000.0) / 1400.0
 
-def process_for_raps(pred_mu, gt_mu, mask, ref_mu=None):
+def process_for_raps(pred_mu, gt_mu, mask):
+    """
+    CRITICAL Q1 FIX: Removed histogram matching which masked the baseline blurring artifacts.
+    Standardized solely on mean-shifting to isolate true model frequency response.
+    """
     p = pred_mu.detach().cpu().squeeze().numpy()
     g = gt_mu.detach().cpu().squeeze().numpy()
     m = mask.detach().cpu().squeeze().numpy().astype(bool)
     
-    if ref_mu is not None:
-        r = ref_mu.detach().cpu().squeeze().numpy()
-        p[m] = match_histograms(p[m], r[m])
-    else:
-        p[m] = p[m] - p[m].mean() + g[m].mean()
+    # Zero-mean shift within the reconstruction FOV mask to match DC bias fairly
+    p[m] = p[m] - p[m].mean() + g[m].mean()
         
     p_t = torch.tensor(p).unsqueeze(0).unsqueeze(0)
     g_t = torch.tensor(g).unsqueeze(0).unsqueeze(0)
@@ -56,12 +57,22 @@ def compute_raps(image_np):
     nr = np.bincount(r.ravel())
     radialprofile = tbin / nr
     
+    # Normalize to DC component for standard relative structural comparison
     radialprofile = radialprofile / radialprofile[0]
     return np.log10(radialprofile + 1e-12)
 
 def generate_full_raps(data_path, device='cuda'):
     print("Generating Q1 RAPS Plot (Clinically Windowed)...")
-    plt.rcParams.update({'font.family': 'serif', 'mathtext.fontset': 'cm'})
+    
+    # Journal-ready publication typography configuration
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.labelsize': 14,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 11
+    })
     
     img_size, angles, detectors, phys_scale = 362, 1000, 513, 0.1
     dataloader = get_ct_dataloader('lodopab', data_path, batch_size=1)
@@ -74,9 +85,7 @@ def generate_full_raps(data_path, device='cuda'):
         "FS-Net (Ours)": FDA_Net(img_size, angles, detectors, num_cascades=3, device=device).to(device)
     }
     
-    # Load Weights (Mapping the new names to the old .pth files)
     ckpt_mapping = {"FS-CNN (PAUM)": "PAUM", "FS-ViT (JotlasNet)": "JotlasNet", "FS-Net (Ours)": "FDA_Net"}
-    
     for name, model in models.items():
         ckpt_path = f"{ckpt_mapping[name]}_subset_BEST.pth"
         if os.path.exists(ckpt_path):
@@ -86,7 +95,7 @@ def generate_full_raps(data_path, device='cuda'):
             print(f"[WARNING] {ckpt_path} not found!")
 
     for i, (sino, gt) in enumerate(dataloader):
-        if i == 15: # Use a slice with good lung anatomy
+        if i == 15:  # Selecting targeted structural scan
             sinogram = sino.to(device) / phys_scale
             ground_truth = gt.to(device) / phys_scale
             break
@@ -102,49 +111,61 @@ def generate_full_raps(data_path, device='cuda'):
         
         for name, model in models.items():
             pred = model(sinogram)
-            p_img, _ = process_for_raps(pred * phys_scale, ground_truth * phys_scale, fov_mask, ref_mu=fbp_pred * phys_scale)
+            # CRITICAL Q1 FIX: Dropped ref_mu parameter to bypass histogram tracking
+            p_img, _ = process_for_raps(pred * phys_scale, ground_truth * phys_scale, fov_mask)
             raps_dict[name] = compute_raps(p_img)
 
     freqs = np.linspace(0, 0.5, len(raps_dict["Ground Truth"]))
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6.5))
     plt.style.use('seaborn-v0_8-whitegrid')
     
     colors = {"Ground Truth": "k", "FBP (Analytical)": "gray", "FS-CNN (PAUM)": "#1f77b4", "FS-ViT (JotlasNet)": "#2ca02c", "FS-Net (Ours)": "#d62728"}
     styles = {"Ground Truth": "-", "FBP (Analytical)": ":", "FS-CNN (PAUM)": "--", "FS-ViT (JotlasNet)": "-.", "FS-Net (Ours)": "-"}
-    widths = {"Ground Truth": 3, "FBP (Analytical)": 2, "FS-CNN (PAUM)": 2, "FS-ViT (JotlasNet)": 2, "FS-Net (Ours)": 2.5}
+    widths = {"Ground Truth": 2.5, "FBP (Analytical)": 1.5, "FS-CNN (PAUM)": 1.75, "FS-ViT (JotlasNet)": 1.75, "FS-Net (Ours)": 2.22}
     
     for name in raps_dict.keys():
         ax.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name], label=name)
     
-    ax.set_title("Radially Averaged Power Spectrum (RAPS)", fontsize=16, fontweight='bold')
-    ax.set_xlabel("Spatial Frequency (cycles/pixel)", fontsize=14)
-    ax.set_ylabel("Log10 Power", fontsize=14)
+    # Q1 JOURNAL FIX: Removed internal main text title. Captions go to LaTeX \caption.
+    ax.set_xlabel("Spatial Frequency (cycles/pixel)", fontsize=14, fontweight='bold')
+    ax.set_ylabel(r"Spectral Power $\left[\log_{10}\right]$", fontsize=14, fontweight='bold')
     ax.set_xlim(0, 0.5)
     
     min_power = np.min(raps_dict["Ground Truth"])
-    ax.set_ylim(min_power - 1, 1)
-    ax.legend(fontsize=12, loc='lower left', frameon=True, shadow=True)
+    ax.set_ylim(min_power - 0.5, 0.5)
+    ax.legend(fontsize=11, loc='lower left', frameon=True, shadow=False, framealpha=0.95, edgecolor='lightgray')
     
-    # --- DYNAMIC INSET BOX ---
-    axins = ax.inset_axes([0.6, 0.55, 0.35, 0.4]) 
+    # --- RIGOROUS INSET AXES SPECIFICATION ---
+    # Placed safely away from lower-left legend boundaries
+    axins = ax.inset_axes([0.55, 0.52, 0.4, 0.42]) 
     for name in raps_dict.keys():
         axins.plot(freqs, raps_dict[name], color=colors[name], linestyle=styles[name], linewidth=widths[name])
     
+    # Calculate a precise bounding envelope for the high-frequency target zone
     idx_03 = int(0.3 / 0.5 * len(freqs))
-    inset_min = np.min(raps_dict["Ground Truth"][idx_03:]) - 0.5
-    inset_max = np.max(raps_dict["Ground Truth"][idx_03:]) + 1.5
+    all_inset_data = [raps_dict[name][idx_03:] for name in raps_dict.keys()]
+    inset_min = np.min(all_inset_data) - 0.2
+    inset_max = np.max(all_inset_data) + 0.2
     
     axins.set_xlim(0.3, 0.5)
     axins.set_ylim(inset_min, inset_max)
-    axins.set_xticklabels([])
-    axins.set_yticklabels([])
-    axins.set_title("High-Frequency Detail", fontsize=10)
-    ax.indicate_inset_zoom(axins, edgecolor="black")
+    
+    # Q1 JOURNAL FIX: Add strict scientific ticks to the zoom block instead of plain blank lines
+    axins.set_xticks([0.3, 0.4, 0.5])
+    axins.set_xticklabels(["0.3", "0.4", "0.5"], fontsize=10)
+    axins.tick_params(axis='y', labelsize=10)
+    axins.grid(True, linestyle=':', alpha=0.5)
+    
+    # Tightly bounding indicators
+    rect, connectors = ax.indicate_inset_zoom(axins, edgecolor="black", alpha=0.4)
+    for connector in connectors:
+        connector.set_linewidth(1.0)
+        connector.set_color("gray")
     
     plt.tight_layout()
-    plt.savefig("fig_raps_full.png", dpi=300)
-    print("SUCCESS: Saved 'fig_raps_full.png'")
+    plt.savefig("fig_raps_q1_compliant.png", dpi=300, bbox_inches='tight')
+    print("SUCCESS: Saved 'fig_raps_q1_compliant.png'")
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"

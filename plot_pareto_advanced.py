@@ -19,7 +19,7 @@ def plot_q1_standard_pareto():
     models = {
         "FS-CNN (PAUM)": [5.13, 28.38, 0.949, 30436],
         "FS-ViT (JotlasNet)": [1.58, 29.24, 0.947, 53122],
-        "FS-Net (Ours)": [1.09, 25.17, 0.919, 8476]
+        "FS-Net (Ours)": [1.09, 28.69, 0.956, 8476]
     }
     
     colors = {"FS-CNN (PAUM)": "#1f77b4", "FS-ViT (JotlasNet)": "#2ca02c", "FS-Net (Ours)": "#d62728"}
